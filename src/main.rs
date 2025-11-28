@@ -220,8 +220,9 @@ fn handle_container(canvas: &mut Canvas, container: &ContainerNode, split:&Split
 
 }
 
-fn handle_child(canvas: &mut Canvas, bar: &LayoutNode, x:i32, y:i32, width: i32, height: i32) {
-    println!("handle_child!! {} {} {} {}", x, y, width, height);
+fn draw_rect_thing(canvas: &mut Canvas, x:i32, y:i32, width: i32, height: i32)
+{
+    let margin = 4;
 
     // --- Rounded rectangle ---
     let mut paint = Paint::default();
@@ -232,28 +233,41 @@ fn handle_child(canvas: &mut Canvas, bar: &LayoutNode, x:i32, y:i32, width: i32,
     paint.set_style(PaintStyle::Stroke);
     paint.set_stroke_width(2.0);
 
-    let rect = Rect::from_xywh(x as f32, y as f32, width as f32, height as f32);
+    let rect = Rect::from_xywh((x + margin) as f32, (y + margin) as f32, (width - margin*2) as f32, (height - margin*2) as f32);
     let rrect = RRect::new_rect_xy(rect, 5.0, 5.0);
     canvas.draw_rrect(rrect, &paint);
+}
 
-    // match &bar
-    // {
-    //     LayoutNode::Container(_container) => {
+fn handle_child(canvas: &mut Canvas, bar: &LayoutNode, x:i32, y:i32, width: i32, height: i32) {
+    println!("handle_child!! {} {} {} {}", x, y, width, height);
 
-    //         // handle_container(container, &container.split, width, height);
-    //     }
-
-    //     LayoutNode::Header(header) => {
-
-    //         println!(".... header? {:?}", header.size);
-    //     }
+    //
 
 
-    //     LayoutNode::Todo(todo) => {
 
-    //         println!(".... todo? {:?}", todo.size);
-    //     }
-    // };
+
+    match &bar
+    {
+        LayoutNode::Container(container) => {
+
+            handle_container(canvas, container, &container.split, x, y, width, height);
+        }
+
+        LayoutNode::Header(header) => {
+
+            println!(".... header? {:?}", header.size);
+
+            draw_rect_thing(canvas, x, y, width, height);
+        }
+
+
+        LayoutNode::Todo(todo) => {
+
+            println!(".... todo? {:?}", todo.size);
+
+            draw_rect_thing(canvas, x, y, width, height);
+        }
+    };
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -277,37 +291,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Background
     canvas.clear(Color::WHITE);
 
-
     if let LayoutNode::Container(ref container) = root {
         handle_container(canvas, container, &container.split, 0, 0, width, height);
     }
-
-
-
-
-    // --- Rounded rectangle ---
-    let mut paint = Paint::default();
-    paint.set_color(Color::from_rgb(0, 128, 255));
-    paint.set_anti_alias(true);
-
-    paint.set_anti_alias(true);
-    paint.set_style(PaintStyle::Stroke);
-    paint.set_stroke_width(2.0);
-
-    // let rect = Rect::from_xywh(50.0, 30.0, 700.0, 250.0);
-    let rect = Rect::from_xywh(0.0, 0.0, 10.0, 825.0);
-    let rrect = RRect::new_rect_xy(rect, 25.0, 25.0);
-    // canvas.draw_rrect(rrect, &paint);
-
-        // Outline (stroke) on top
-        // let mut stroke_paint = Paint::default();
-        // stroke_paint.set_color(self.bar_stroke_color.resolve(&resources));
-        // stroke_paint.set_anti_alias(true);
-        // stroke_paint.set_style(PaintStyle::Stroke);
-        // stroke_paint.set_stroke_width(2.0);
-        // canvas.draw_rrect(rrect, &stroke_paint);
-
-
 
     // --- Style 1 (Roboto) ---
     if false {

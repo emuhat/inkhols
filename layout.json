@@ -1,0 +1,29 @@
+{
+    "size": "1u",
+    "type": "container",
+    "split": "vertical",
+    "entries": [
+        {
+            "type": "header",
+            "size": "30px"
+        },
+        {
+            "type": "todo",
+            "size": "50px"
+        },
+        {
+            "type": "header",
+            "size": "1u"
+        },
+        {
+            "type": "container",
+            "split": "horizontal",
+            "size": "0.5u",
+            "entries": [
+                { "type": "header", "size": "100px" },
+                { "type": "todo", "size": "1u" },
+                { "type": "header", "size": "100px" }
+            ]
+        }
+    ]
+}
