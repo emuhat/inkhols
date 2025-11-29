@@ -1,13 +1,14 @@
 // src/main.rs
 use serde::Deserialize;
 use skia_safe::{
-    Color, Font, FontStyle, Paint, PaintStyle, Rect, RRect, Surface, TextBlob, Typeface,
+    Color, Font, Paint, PaintStyle, Rect, RRect, Surface, TextBlob, Typeface,
     Canvas,
 };
 use std::fs;
 use std::fs::File;
 use std::io::BufWriter;
 use std::io::Write;
+use skia_safe::Data;
 
 /// ---- Data model (from JSON) ----
 
@@ -17,14 +18,20 @@ pub enum LayoutNode {
     #[serde(rename = "container")]
     Container(ContainerNode),
 
-    #[serde(rename = "header")]
-    Header(SizedNode),
+    #[serde(rename = "date")]
+    Date(SizedNode),
 
     #[serde(rename = "todo")]
     Todo(SizedNode),
 
     #[serde(rename = "weather")]
     Weather(SizedNode),
+
+    #[serde(rename = "allowance")]
+    Allowance(SizedNode),
+
+    #[serde(rename = "countdown")]
+    Countdown(SizedNode),
 
     #[serde(rename = "battery")]
     Battery(SizedNode),
@@ -109,9 +116,11 @@ impl LayoutNode {
     fn size(&self) -> &Size {
         match self {
             LayoutNode::Container(n) => n.size(),
-            LayoutNode::Header(n) => n.size(),
+            LayoutNode::Date(n) => n.size(),
             LayoutNode::Todo(n) => n.size(),
             LayoutNode::Weather(n) => n.size(),
+            LayoutNode::Allowance(n) => n.size(),
+            LayoutNode::Countdown(n) => n.size(),
             LayoutNode::Battery(n) => n.size(),
             LayoutNode::Verse(n) => n.size(),
         }
@@ -153,10 +162,10 @@ fn draw_rect_thing(canvas: &mut Canvas, x: i32, y: i32, width: i32, height: i32)
     canvas.draw_rrect(rrect, &paint);
 }
 
-fn draw_text_blob(canvas: &mut Canvas, x: i32, y: i32, text: &str, size: f32) {
+fn draw_text_blob(canvas: &mut Canvas, font: &Font, x: i32, y: i32, text: &str, size: f32) {
     // Try to load Roboto but fallback to default if missing.
-    let tf = Typeface::new("Roboto", FontStyle::normal()).unwrap_or(Typeface::default());
-    let font = Font::new(tf, size);
+    // let tf = Typeface::new("Roboto", FontStyle::normal()).unwrap_or(Typeface::default());
+    // let font = Font::new(tf, size);
 
     let mut paint = Paint::default();
     paint.set_color(Color::BLACK);
@@ -170,10 +179,48 @@ fn draw_text_blob(canvas: &mut Canvas, x: i32, y: i32, text: &str, size: f32) {
     }
 }
 
+fn load_font_from_file(path: &str, size: f32) -> Font {
+    // Load the font file into memory
+    let font_bytes = fs::read(path).expect("Failed to read font file");
+    let data = Data::new_copy(&font_bytes);
+
+    // Create the typeface from the in-memory data
+    let tf = Typeface::from_data(data, 0).unwrap_or_else(|| Typeface::default());
+
+    Font::new(tf, size)
+}
+
+struct FontBoss
+{
+    pub main_font: Font,
+    pub emoji_font: Font,
+}
+
+impl FontBoss
+{
+    pub fn load_font(size: f32) -> Font
+    {
+        load_font_from_file("Crimson_Pro/static/CrimsonPro-Regular.ttf", size)
+    }
+
+    pub fn new() -> Self
+    {
+        // Try to load Roboto but fallback to default if missing.
+        let font = Self::load_font(25.0);
+        let emoji_font = load_font_from_file("NotoEmoji.ttf", 25.0);
+
+        FontBoss {
+            main_font: font,
+            emoji_font: emoji_font,
+        }
+    }
+}
+
 /// ---- Layout engine: container splitting and child dispatch ----
 
 fn handle_container(
     canvas: &mut Canvas,
+    font_boss: &FontBoss,
     container: &ContainerNode,
     split: &SplitDirection,
     x: i32,
@@ -235,48 +282,58 @@ fn handle_container(
 
         match split {
             SplitDirection::Horizontal => {
-                handle_child(canvas, &child, x + sx, y, s, height);
+                handle_child(canvas, font_boss, &child, x + sx, y, s, height);
             }
             SplitDirection::Vertical => {
-                handle_child(canvas, &child, x, y + sx, width, s);
+                handle_child(canvas, font_boss, &child, x, y + sx, width, s);
             }
         }
     }
 }
 
-fn handle_child(canvas: &mut Canvas, node: &LayoutNode, x: i32, y: i32, width: i32, height: i32) {
+fn handle_child(canvas: &mut Canvas, font_boss: &FontBoss, node: &LayoutNode, x: i32, y: i32, width: i32, height: i32) {
     match node {
         LayoutNode::Container(container) => {
-            handle_container(canvas, container, &container.split, x, y, width, height);
+            handle_container(canvas, font_boss, container, &container.split, x, y, width, height);
         }
-        LayoutNode::Header(_) => {
-            // header: render a filled rounded rect and big text
-            let mut paint = Paint::default();
-            paint.set_color(Color::from_rgb(240, 240, 240));
-            paint.set_anti_alias(true);
-            paint.set_style(PaintStyle::Fill);
+        LayoutNode::Date(_) => {
+            // date: render a filled rounded rect and big text
+            // let mut paint = Paint::default();
+            // paint.set_color(Color::from_rgb(240, 240, 240));
+            // paint.set_anti_alias(true);
+            // paint.set_style(PaintStyle::Fill);
 
-            let rect = Rect::from_xywh(x as f32 + 4.0, y as f32 + 4.0, width as f32 - 8.0, height as f32 - 8.0);
-            let rrect = RRect::new_rect_xy(rect, 8.0, 8.0);
-            canvas.draw_rrect(rrect, &paint);
+            // let rect = Rect::from_xywh(x as f32 + 4.0, y as f32 + 4.0, width as f32 - 8.0, height as f32 - 8.0);
+            // let rrect = RRect::new_rect_xy(rect, 8.0, 8.0);
+            // canvas.draw_rrect(rrect, &paint);
 
-            draw_text_blob(canvas, x, y + 4, "HEADER", 20.0);
+            let font = FontBoss::load_font(35.0);
+            draw_text_blob(canvas, &font, x, y + 4, "Saturday November 29", 20.0);
         }
         LayoutNode::Todo(_) => {
-            draw_rect_thing(canvas, x, y, width, height);
-            draw_text_blob(canvas, x, y, "Todo list", 14.0);
+            // draw_rect_thing(canvas, x, y, width, height);
+            draw_text_blob(canvas, &font_boss.main_font, x, y, "Todo list", 14.0);
         }
         LayoutNode::Weather(_) => {
-            draw_rect_thing(canvas, x, y, width, height);
-            draw_text_blob(canvas, x, y, "Weather", 14.0);
+            // draw_rect_thing(canvas, x, y, width, height);
+            draw_text_blob(canvas, &font_boss.main_font, x, y, "Weather °F", 14.0);
+        }
+        LayoutNode::Allowance(_) => {
+            // draw_rect_thing(canvas, x, y, width, height);
+            draw_text_blob(canvas, &font_boss.main_font, x, y, "Allowance", 14.0);
+        }
+        LayoutNode::Countdown(_) => {
+            // draw_rect_thing(canvas, x, y, width, height);
+            draw_text_blob(canvas, &font_boss.emoji_font, x, y, "🎂", 14.0);
+            draw_text_blob(canvas, &font_boss.main_font, x + 40, y, "Greg", 14.0);
         }
         LayoutNode::Battery(_) => {
-            draw_rect_thing(canvas, x, y, width, height);
-            draw_text_blob(canvas, x, y, "Battery", 14.0);
+            // draw_rect_thing(canvas, x, y, width, height);
+            draw_text_blob(canvas, &font_boss.main_font, x, y, "Battery", 14.0);
         }
         LayoutNode::Verse(_) => {
-            draw_rect_thing(canvas, x, y, width, height);
-            draw_text_blob(canvas, x, y, "Verse", 14.0);
+            // draw_rect_thing(canvas, x, y, width, height);
+            draw_text_blob(canvas, &font_boss.main_font, x, y, "Verse", 14.0);
         }
     }
 }
@@ -292,6 +349,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let width = 1200;
     let height = 825;
 
+    let font_boss = FontBoss::new();
+
     let mut surface = Surface::new_raster_n32_premul((width, height))
         .expect("Failed to create Skia surface");
     let canvas = surface.canvas();
@@ -300,7 +359,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     canvas.clear(Color::WHITE);
 
     if let LayoutNode::Container(ref container) = root {
-        handle_container(canvas, container, &container.split, 0, 0, width, height);
+        handle_container(canvas, &font_boss, container, &container.split, 0, 0, width, height);
     } else {
         println!("Root of layout.json must be a container node.");
     }
