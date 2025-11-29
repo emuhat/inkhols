@@ -9,24 +9,24 @@
             "split": "vertical",
             "size": "1.5u",
             "entries": [
-                {
-                    "type": "date",
-                    "size": "50px"
-                },
-                { "type": "weather", "size": "1u" },
+                { "type": "weather", "size": "550px" },
                 { "type": "verse", "size": "1u" }
             ]
         },
+
+        { "type": "vline", "size": "40px" },
 
         {
             "type": "container",
             "split": "vertical",
             "size": "1u",
             "entries": [
+                { "type": "date", "size": "100px" },
                 {
                     "type": "allowance",
                     "size": "1u"
                 },
+                { "type": "hline", "size": "50px" },
                 {
                     "type": "countdown",
                     "size": "1u"
