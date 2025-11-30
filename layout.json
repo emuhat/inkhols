@@ -24,7 +24,7 @@
                 { "type": "date", "size": "100px" },
                 {
                     "type": "allowance",
-                    "size": "1u"
+                    "size": "120px"
                 },
                 { "type": "hline", "size": "50px" },
                 {

@@ -23,6 +23,7 @@ use skia_safe::{
 use std::fs;
 use std::fs::File;
 use std::io::BufWriter;
+use chrono::NaiveDateTime;
 use std::io::Write;
 // use skia_safe::codec::Options;
 // use skia_safe::runtime_effect::Options;
@@ -33,6 +34,13 @@ fn days_between(date: NaiveDate) -> i64 {
 }
 
 /// ---- Data model (from JSON) ----
+
+#[derive(Debug, Deserialize)]
+struct SignificantDate {
+    name: String,
+    date: String,
+    emoji: String,
+}
 
 #[derive(Debug, Deserialize)]
 pub struct WeatherResponse {
@@ -82,6 +90,7 @@ pub struct DailyWeather {
 
 pub struct AllData {
     weather: WeatherResponse,
+    significant_dates: Vec<SignificantDate>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -678,17 +687,32 @@ fn draw_weather(
     let today_offset = 110;
     let hourly_height = 80;
 
-    let n_forecast_hours = 7;
+    let n_forecast_hours = 24;
     for i in 0..n_forecast_hours {
-        draw_text_blob_with_color(
-            canvas,
-            &mini_font,
-            (x as f32 + 25.0 + i as f32 * 102.0) as i32,
-            y + today_offset + 210,
-            "12 PM",
-            Color::BLACK,
-            0.0,
-        );
+
+        println!(" >> {}", weather.hourly.time[i]);
+
+        // Parse as a naive datetime (no timezone)
+        let dt = NaiveDateTime::parse_from_str(&weather.hourly.time[i], "%Y-%m-%dT%H:%M")
+            .expect("Failed to parse datetime");
+
+        // Format as 12-hour with AM/PM
+        let formatted = dt.format("%-I %p").to_string(); // %-I = hour without leading zero
+
+        println!("{formatted}"); // "12 AM"
+
+        if i%4 == 0 {
+            draw_text_blob_with_color(
+                canvas,
+                &mini_font,
+                (x as f32 + 25.0 + i as f32 * 25.0) as i32,
+                y + today_offset + 210,
+                &formatted,
+                Color::BLACK,
+                0.0,
+            );
+        }
+
     }
 
     // temperature curve for today
@@ -1054,7 +1078,7 @@ fn handle_child(
                 &font,
                 x + width - 10,
                 (y as f32 + lh) as i32 - 2,
-                "Saturday November 29",
+                "Saturday November 29 2025",
                 Color::BLACK,
                 1.0,
             );
@@ -1104,35 +1128,28 @@ fn handle_child(
                 draw_text_blob_with_color(
                     canvas,
                     &font_boss.main_font,
-                    x + width - 25,
+                    x + width - 240,
                     yoff,
                     &format_cents_commas(items[i].1),
                     Color::BLACK,
                     1.0,
                 );
 
-                draw_text_blob(canvas, &font_boss.emoji_font, x + 100, yoff, "😍😀😐❌➖");
+                draw_text_blob(canvas, &font_boss.emoji_font, x + width - 210, yoff, "❓🤩😀😐❌➖");
             }
         }
         LayoutNode::Countdown(_) => {
-            let items = vec![
-                ("🎄", "Christmas", "2025-12-25"),
-                ("🎂", "Greg's Birthday", "2025-12-31"),
-                ("🎉", "Martin Luther King Jr. Day", "2026-01-19"),
-                ("🐿️", "Groundhog Day", "2026-02-02"),
-                ("🐰", "Easter", "2026-04-05"),
-                ("🗽", "July 4", "2026-07-04"),
-            ];
+            let sig_dates = &data.significant_dates;
 
-            for i in 0..items.len() {
-                let yoff = y + i as i32 * 50;
+            for i in 0..sig_dates.len() {
+                let yoff = y + i as i32 * 45 + 20;
 
-                let target = NaiveDate::parse_from_str(items[i].2, "%Y-%m-%d").unwrap();
+                let target = NaiveDate::parse_from_str(&sig_dates[i].date, "%Y-%m-%d").unwrap();
                 let diff = days_between(target);
 
                 // draw_rect_thing(canvas, x, y, width, height);
-                draw_text_blob(canvas, &font_boss.emoji_font, x, yoff - 2, items[i].0);
-                draw_text_blob(canvas, &font_boss.main_font, x + 45, yoff, items[i].1);
+                draw_text_blob(canvas, &font_boss.emoji_font, x, yoff - 2, &sig_dates[i].emoji);
+                draw_text_blob(canvas, &font_boss.main_font, x + 45, yoff, &sig_dates[i].name);
                 draw_text_blob_with_color(
                     canvas,
                     &font_boss.main_font,
@@ -1160,7 +1177,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let json = std::fs::read_to_string("weather.json")?;
     let weather: WeatherResponse = serde_json::from_str(&json)?;
 
-    let data = AllData { weather: weather };
+    let data = fs::read_to_string("dates.json")?;
+    let significant_dates: Vec<SignificantDate> = serde_json::from_str(&data)?;
+
+    for holiday in &significant_dates {
+        println!("{} {} on {}", holiday.emoji, holiday.name, holiday.date);
+    }
+
+    let data = AllData { weather: weather, significant_dates: significant_dates };
 
     // println!("{:#?}", weather.current.temperature);
 
