@@ -1,30 +1,36 @@
 // src/main.rs
 // Use resvg's re-exported tiny-skia to avoid version conflicts
+use chrono::Datelike; // For .weekday()
+use chrono::Local;
+use chrono::NaiveDate;
+use resvg::Tree as ResvgTree; // Also use resvg's re-exported usvg
 use resvg::tiny_skia;
 use resvg::usvg;
-use resvg::Tree as ResvgTree; // Also use resvg's re-exported usvg
-use serde::Deserialize;
-use skia_safe::Color4f;
-use skia_safe::ImageInfo;
-use skia_safe::ColorType;
-use skia_safe::AlphaType;
 use resvg::usvg::TreeParsing;
+use serde::Deserialize;
+use skia_safe::AlphaType;
+use skia_safe::Color4f;
+use skia_safe::ColorType;
 use skia_safe::Data;
+use skia_safe::Image;
+use skia_safe::ImageInfo;
 use skia_safe::Path;
 use skia_safe::gradient_shader;
 use skia_safe::{
     Canvas, Color, Font, Paint, PaintStyle, Point, RRect, Rect, Surface, TextBlob, TileMode,
     Typeface,
 };
-use chrono::NaiveDate;
-use chrono::Datelike; // For .weekday()
 use std::fs;
 use std::fs::File;
 use std::io::BufWriter;
 use std::io::Write;
-use skia_safe::Image;
 // use skia_safe::codec::Options;
 // use skia_safe::runtime_effect::Options;
+
+fn days_between(date: NaiveDate) -> i64 {
+    let today = Local::now().date_naive();
+    (date - today).num_days()
+}
 
 /// ---- Data model (from JSON) ----
 
@@ -55,9 +61,9 @@ pub struct CurrentWeather {
 pub struct HourlyWeather {
     pub time: Vec<String>,
     #[serde(rename = "temperature_2m")]
-    pub temperature: Vec<f64>,
+    pub temperature: Vec<f32>,
     pub weather_code: Vec<u32>,
-    pub precipitation: Vec<f64>,
+    pub precipitation: Vec<f32>,
     pub precipitation_probability: Vec<u32>,
 }
 
@@ -261,7 +267,7 @@ fn draw_text_blob_with_color(
     y: i32,
     text: &str,
     color: Color,
-    align: f32
+    align: f32,
 ) {
     let mut paint = Paint::default();
     paint.set_color(color);
@@ -310,7 +316,7 @@ impl FontBoss {
     pub fn new() -> Self {
         // Try to load Roboto but fallback to default if missing.
         let font = Self::load_font(25.0);
-        let emoji_font = load_font_from_file("NotoEmoji.ttf", 25.0);
+        let emoji_font = load_font_from_file("NotoEmoji.ttf", 30.0);
 
         FontBoss {
             main_font: font,
@@ -483,6 +489,7 @@ fn draw_hourly(
     width: i32,
     height: i32,
     values: &[f32],
+    symbol: &str,
 ) {
     // draw_rect_thing(canvas, x, y, width, height);
 
@@ -510,18 +517,6 @@ fn draw_hourly(
         temp_points.push(Point::new(px, py));
 
         // draw_filled_circle(canvas, Point::new(px, py), 5.0);
-
-        if i % 2 == 0 {
-            draw_text_blob_with_color(
-                canvas,
-                &mini_font,
-                px as i32 - 6,
-                py as i32 - 8,
-                "32",
-                Color::from_rgb(128, 128, 128),
-                0.0
-            );
-        }
     }
     //draw_catmull_rom_curve(canvas, &temp_points);
     fill_catmull_rom_area(
@@ -529,9 +524,26 @@ fn draw_hourly(
         &temp_points,
         graph_offset + graph_height + graph_base,
     );
+
+    for i in 0..values.len() {
+        let val = (values[i] - min) / vsize;
+        let px = (x + margin) as f32 + i as f32 * dp_width;
+        let py = graph_offset + val * graph_height as f32;
+        if i % 3 == 0 {
+            draw_text_blob_with_color(
+                canvas,
+                &mini_font,
+                px as i32 - 6,
+                py as i32 - 11,
+                &format!("{}{}", values[i].round(), symbol),
+                Color::from_rgb(128, 128, 128),
+                0.0,
+            );
+        }
+    }
 }
 
-fn draw_temp_gradient(canvas: &mut Canvas, x: i32, y: i32, width: i32, height: i32) {
+fn draw_box_with_gradient(canvas: &mut Canvas, x: i32, y: i32, width: i32, height: i32, top_color:Color, bottom_color:Color) {
     let margin = 0;
 
     let rect = Rect::from_xywh(
@@ -543,8 +555,8 @@ fn draw_temp_gradient(canvas: &mut Canvas, x: i32, y: i32, width: i32, height: i
     let rrect = RRect::new_rect_xy(rect, 8.0, 8.0);
 
     // --- Gradient fill ---
-    let start_color = Color4f::from(Color::from_rgb(140, 140, 140));
-    let end_color = Color4f::from(Color::from_rgb(240, 240, 240));
+    let start_color = Color4f::from(top_color);
+    let end_color = Color4f::from(bottom_color);
 
     // make a slice explicitly
     let colors_slice: &[Color4f] = &[start_color, end_color];
@@ -578,6 +590,10 @@ fn draw_temp_gradient(canvas: &mut Canvas, x: i32, y: i32, width: i32, height: i
     canvas.draw_rrect(rrect, &stroke_paint);
 }
 
+fn draw_temp_gradient(canvas: &mut Canvas, x: i32, y: i32, width: i32, height: i32) {
+    draw_box_with_gradient(canvas, x, y, width, height, Color::from_rgb(140, 140, 140), Color::from_rgb(240, 240, 240));
+}
+
 fn wmo_code_to_icon(code: u8) -> &'static str {
     match code {
         0 => "sunny-29.svg",                  // Clear sky
@@ -596,12 +612,11 @@ fn wmo_code_to_icon(code: u8) -> &'static str {
         // Some extreme / less common cases
         61..=67 => "shower-rain-1.svg",
         70..=79 => "medium-snow_01.svg",
-        _ => "partly-cloudy_01.svg",          // Default / unknown codes
+        _ => "partly-cloudy_01.svg", // Default / unknown codes
     }
 }
 
-fn code_to_svg(code:u8, dim:u32) -> Result<LoadedSvg, Box<dyn std::error::Error>>
-{
+fn code_to_svg(code: u8, dim: u32) -> Result<LoadedSvg, Box<dyn std::error::Error>> {
     let icon_file = format!("weather-icons/{}", wmo_code_to_icon(code));
     svg_from_file(icon_file.as_str(), dim, dim, 1.0)
 }
@@ -619,10 +634,11 @@ fn draw_weather(
 
     let svg = code_to_svg(weather.current.weather_code, 75);
 
-    canvas.draw_image(&svg.unwrap().image, (x as f32 + 15.0, y as f32 + 10.0), None);
-
-
-
+    canvas.draw_image(
+        &svg.unwrap().image,
+        (x as f32 + 15.0, y as f32 + 10.0),
+        None,
+    );
 
     let mini_font = FontBoss::load_font(20.0);
     let mega_font = FontBoss::load_font(100.0);
@@ -646,7 +662,7 @@ fn draw_weather(
             weather.current.apparent_temperature.round()
         ),
         Color::BLACK,
-        1.0
+        1.0,
     );
 
     draw_text_blob_with_color(
@@ -656,34 +672,30 @@ fn draw_weather(
         y + now_offset + 35,
         &format!("Humidity {}%", weather.current.relative_humidity),
         Color::BLACK,
-        1.0
+        1.0,
     );
-
-    // let n_forecast_hours = 7;
-    // for i in 0..n_forecast_hours {
-    //     draw_text_blob(
-    //         canvas,
-    //         &mini_font,
-    //         (x as f32 + 25.0 + i as f32 * day_width) as i32,
-    //         y + 325,
-    //         "12 PM",
-    //     );
-    // }
 
     let today_offset = 110;
     let hourly_height = 80;
 
+    let n_forecast_hours = 7;
+    for i in 0..n_forecast_hours {
+        draw_text_blob_with_color(
+            canvas,
+            &mini_font,
+            (x as f32 + 25.0 + i as f32 * 102.0) as i32,
+            y + today_offset + 210,
+            "12 PM",
+            Color::BLACK,
+            0.0,
+        );
+    }
+
     // temperature curve for today
     let mut temp_points: Vec<f32> = Vec::new();
-    temp_points.push(33.0);
-    temp_points.push(33.0);
-    temp_points.push(32.0);
-    temp_points.push(31.0);
-    temp_points.push(32.0);
-    temp_points.push(33.0);
-    temp_points.push(30.0);
-    temp_points.push(29.0);
-    temp_points.push(28.0);
+    for i in 0..23 {
+        temp_points.push(weather.hourly.temperature[i]);
+    }
     draw_hourly(
         canvas,
         &mini_font,
@@ -692,18 +704,13 @@ fn draw_weather(
         width - 20,
         hourly_height,
         &temp_points,
+        "°",
     );
 
     let mut precip_points: Vec<f32> = Vec::new();
-    precip_points.push(4.0);
-    precip_points.push(4.0);
-    precip_points.push(4.0);
-    precip_points.push(5.0);
-    precip_points.push(7.0);
-    precip_points.push(7.0);
-    precip_points.push(7.0);
-    precip_points.push(7.0);
-    precip_points.push(7.0);
+    for i in 0..23 {
+        precip_points.push(weather.hourly.precipitation_probability[i] as f32);
+    }
     draw_hourly(
         canvas,
         &mini_font,
@@ -712,6 +719,7 @@ fn draw_weather(
         width - 20,
         hourly_height,
         &precip_points,
+        "%",
     );
 
     // draw_catmull_rom_curve(canvas, &temp_points);
@@ -736,9 +744,7 @@ fn draw_weather(
     //     draw_text_blob(canvas, &mini_font, x + 30 + i * 95, y + today_offset + 105, "12 PM");
     // }
 
-
     if let Some(daily) = &weather.daily {
-
         let day_width = 102.0;
 
         let weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -755,7 +761,7 @@ fn draw_weather(
         }
         let temp_range = max_temp - min_temp;
 
-        let max_daily_vpixels_allowed = 80;
+        let max_daily_vpixels_allowed = 105;
         let pixels_per_degree = max_daily_vpixels_allowed as f32 / temp_range;
 
         println!("min max  {} {}", max_temp, min_temp);
@@ -763,11 +769,7 @@ fn draw_weather(
         println!("max pixels {}", max_daily_vpixels_allowed);
         println!("pixels per degree {}", pixels_per_degree);
 
-
-
-
         for i in 0..num_daily_pts {
-
             // Parse the string into a NaiveDate
             let date = NaiveDate::parse_from_str(&daily.time[i], "%Y-%m-%d").expect("Invalid date");
 
@@ -778,48 +780,77 @@ fn draw_weather(
             let x = px as i32 - 10;
             let y = y as i32 + 350;
 
-            let temp_diff = 5.0; //max_temp - daily.temperature_max[i] as f32;
-
             let qdiff = max_temp - daily.temperature_max[i] as f32;
 
             let vpushdown = qdiff * pixels_per_degree;
 
-            println!( "   {}: {}-{}, {}", i, daily.temperature_min[i], daily.temperature_max[i], qdiff);
-
-
+            println!(
+                "   {}: {}-{}, {} -> {}",
+                i, daily.temperature_min[i], daily.temperature_max[i], qdiff, vpushdown
+            );
 
             let this_grad_off = vpushdown as i32;
-            let this_diff = daily.temperature_max[i] - daily.temperature_min[i];
-            let this_daily_height = (pixels_per_degree * this_diff) as i32;
+            let this_daily_height =
+                (pixels_per_degree * (daily.temperature_max[i] - daily.temperature_min[i])) as i32;
 
-            draw_text_blob_with_color(canvas, &mini_font, x, y + this_grad_off, &format!("{}°", daily.temperature_max[i].round()), Color::BLACK, 0.5);
+            draw_text_blob_with_color(
+                canvas,
+                &mini_font,
+                x,
+                y + this_grad_off,
+                &format!("{}°", daily.temperature_max[i].round()),
+                Color::BLACK,
+                0.5,
+            );
 
             draw_temp_gradient(canvas, x - 7, y + this_grad_off + 10, 14, this_daily_height);
 
-            draw_text_blob_with_color(canvas, &mini_font, x, y + this_grad_off + this_daily_height + 32, &format!("{}°", daily.temperature_min[i].round()), Color::BLACK, 0.5);
+            draw_text_blob_with_color(
+                canvas,
+                &mini_font,
+                x,
+                y + this_grad_off + this_daily_height + 32,
+                &format!("{}°", daily.temperature_min[i].round()),
+                Color::BLACK,
+                0.5,
+            );
 
             let precip_text = format!("{}%", daily.precipitation_probability[i].round());
 
             let svg_width = 25;
             let label_margin = 7.0;
-            let precip_height = 50;
-            let day_label_width = svg_width as f32 + mini_font.measure_str(&precip_text, None).0 + 5.0;
+            let precip_height = max_daily_vpixels_allowed + 30;
+            let day_label_width =
+                svg_width as f32 + mini_font.measure_str(&precip_text, None).0 + 5.0;
             let half_width = day_label_width * 0.5;
             let label_start = x as f32 - half_width;
 
             let svg = code_to_svg(daily.weather_code[i], svg_width);
-            canvas.draw_image(&svg.unwrap().image, (label_start, (y + max_daily_vpixels_allowed + precip_height) as f32 + 10.0), None);
+            canvas.draw_image(
+                &svg.unwrap().image,
+                (label_start, (y + precip_height) as f32 + 10.0),
+                None,
+            );
 
             draw_text_blob_with_color(
                 canvas,
                 &mini_font,
                 (label_start + label_margin) as i32 + svg_width as i32,
-                y + max_daily_vpixels_allowed + precip_height + 29,
+                y + precip_height + 29,
                 &precip_text,
-                Color::BLACK, 0.0
+                Color::BLACK,
+                0.0,
             );
 
-            draw_text_blob_with_color(canvas, &font_boss.main_font, x, y + max_daily_vpixels_allowed + 110, weekdays[weekday as usize], Color::BLACK, 0.5);
+            draw_text_blob_with_color(
+                canvas,
+                &font_boss.main_font,
+                x,
+                y + precip_height + 60,
+                weekdays[weekday as usize],
+                Color::BLACK,
+                0.5,
+            );
         }
     }
 }
@@ -836,7 +867,6 @@ pub fn svg_from_file(
     target_height: u32,
     scalar: f32,
 ) -> Result<LoadedSvg, Box<dyn std::error::Error>> {
-
     let svg_data = std::fs::read(path)?;
 
     let options = usvg::Options::default();
@@ -882,73 +912,112 @@ pub fn svg_from_file(
     })
 }
 
-fn draw_verse(
-    canvas: &mut Canvas,
-    font_boss: &FontBoss,
-    x: i32,
-    y: i32,
-    _width: i32,
-    _height: i32,
-) {
-    // draw_rect_thing(canvas, x, y, width, height);
+fn measure_and_draw(canvas: &mut Canvas, x:i32, y:i32, width: i32, height: i32, tokens: &Vec<&str>, attr:&str, fsize: f32, draw: bool, ypad:i32) -> f32 {
+    let font = FontBoss::load_font(fsize);
+    let spacew = font.measure_str(" ", None).0;
+    let padding = 25;
 
-    let y_off = 40;
-    draw_text_blob(
-        canvas,
-        &font_boss.main_font,
-        x + 10,
-        y + y_off,
-        "The king’s scribes were summoned at that time, in the third month,",
-    );
-    draw_text_blob(
-        canvas,
-        &font_boss.main_font,
-        x + 10,
-        y + y_off + 30 * 1,
-        "which is the month of Sivan, on the twenty-third day. And an edict",
-    );
-    draw_text_blob(
-        canvas,
-        &font_boss.main_font,
-        x + 10,
-        y + y_off + 30 * 2,
-        "was written, according to all that Mordecai commanded concerning",
-    );
-    draw_text_blob(
-        canvas,
-        &font_boss.main_font,
-        x + 10,
-        y + y_off + 30 * 3,
-        "the Jews, to the satraps and the governors and the officials of the",
-    );
-    draw_text_blob(
-        canvas,
-        &font_boss.main_font,
-        x + 10,
-        y + y_off + 30 * 4,
-        "provinces from India to Ethiopia, 127 provinces, to each province in its",
-    );
-    draw_text_blob(
-        canvas,
-        &font_boss.main_font,
-        x + 10,
-        y + y_off + 30 * 5,
-        "own script and to each people in its own language, and also to the Jews",
-    );
-    draw_text_blob(
-        canvas,
-        &font_boss.main_font,
-        x + 10,
-        y + y_off + 30 * 6,
-        "in their script and their language.",
-    );
-    draw_text_blob(
-        canvas,
-        &font_boss.main_font,
-        x + 10,
-        y + y_off + 30 * 7,
-        "Esther 8:9",
-    );
+    let raw_lh = line_height(&font) * 0.6;
+    let lh = raw_lh * 1.9;
+    let mut xp = 0.0;
+    let mut yp = raw_lh;
+
+    let target_width = (width - padding*3) as f32;
+    let target_height = (height - padding*3) as f32;
+
+    if false && draw {
+        draw_filled_circle(canvas, Point::new((x+padding) as f32, (y+padding) as f32), 3.0);
+        draw_filled_circle(canvas, Point::new((x+padding) as f32 + target_width, (y+padding) as f32), 3.0);
+        draw_filled_circle(canvas, Point::new((x+padding) as f32 + target_width, (y+padding) as f32 + target_height), 3.0);
+    }
+
+
+    for token in tokens {
+        let ww = font.measure_str(token, None).0;
+        // println!("{} - {}", token, ww);
+
+        if xp + ww > target_width {
+            xp = 0.0;
+            yp += lh;
+        }
+
+        if draw {
+            draw_text_blob(canvas, &font, xp as i32 + x + padding, yp as i32 + y + padding + ypad, token);
+        }
+
+        xp += ww;
+        xp += spacew;
+    }
+
+    yp += lh;
+    xp = 0.0;
+
+    if draw {
+        draw_text_blob_with_color(canvas, &font, xp as i32 + x + padding + target_width as i32, yp as i32 + y + padding + ypad, attr, Color::BLACK, 1.0);
+    }
+
+    // draw at      (y + padding) + yp
+    // limit at     (y + padding) as f32 + target_height)
+
+    let leftover = target_height - yp;
+
+    // println!("yp {}  th {}", yp, target_height);
+
+    leftover
+}
+
+fn draw_verse(canvas: &mut Canvas, x: i32, y: i32, width: i32, height: i32) {
+
+    let margin = 15;
+
+    draw_box_with_gradient(canvas, x + margin, y + margin, width - margin, height - margin*2, Color::from_rgb(220, 220, 220), Color::from_rgb(240, 240, 240));
+
+    let attr = "Esther 8:9";
+    let verse = "The king's scribes were summoned at that time, in the third month, which is the month of Sivan, on the twenty-third day. And an edict was written, according to all that Mordecai commanded concerning the Jews, to the satraps and the governors and the officials of the provinces from India to Ethiopia, 127 provinces, to each province in its own script and to each people in its own language, and also to the Jews in their script and their language.";
+    // let verse = "Be strong and take heart, all you who hope in the LORD.";
+    let tokens: Vec<&str> = verse.split_whitespace().collect();
+
+
+    for i in (10..=50).rev() {
+        let fsize = i as f32 * 0.5;
+
+        let yleftover = measure_and_draw(canvas,x + margin,y + margin,width,height, &tokens, &attr, fsize, false, 0);
+
+        let fits = yleftover >= 0.0;
+
+        println!("{fsize} -> {fits}");
+
+        if fits {
+
+            // Now we can draw!
+            let ypad = (yleftover * 0.5) . round();
+            let _ = measure_and_draw(canvas,x + margin,y + margin,width,height, &tokens, &attr, fsize, true, ypad as i32);
+
+            break;
+        }
+    }
+}
+
+fn format_cents_commas(cents: i64) -> String {
+    let dollars = cents / 100;
+    let remainder = cents % 100;
+
+    let s = dollars.to_string();
+    let mut out = String::new();
+
+    // Insert commas from the right
+    let mut count = 0;
+    for ch in s.chars().rev() {
+        if count == 3 {
+            out.push(',');
+            count = 0;
+        }
+        out.push(ch);
+        count += 1;
+    }
+
+    let dollar_str: String = out.chars().rev().collect();
+    format!("${}.{:02}", dollar_str, remainder)
 }
 
 fn handle_child(
@@ -980,12 +1049,14 @@ fn handle_child(
 
             let lh = line_height(&font);
 
-            draw_text_blob(
+            draw_text_blob_with_color(
                 canvas,
                 &font,
-                x + 10,
+                x + width - 10,
                 (y as f32 + lh) as i32 - 2,
                 "Saturday November 29",
+                Color::BLACK,
+                1.0,
             );
             // draw_rect_thing(canvas, x, y, width, height);
 
@@ -1008,7 +1079,7 @@ fn handle_child(
         }
         LayoutNode::HLine(_) => {
             // draw_rect_thing(canvas, x, y, width, height);
-            let hbuf = 50.0;
+            let hbuf = 0.0;
             let loc = (y as f32 + (y + height) as f32) * 0.5;
             let start = Point::new(x as f32 + hbuf, loc); // Start coordinates
             let end = Point::new((x + width) as f32 - hbuf, loc); // End coordinates
@@ -1016,27 +1087,67 @@ fn handle_child(
         }
         LayoutNode::VLine(_) => {
             // draw_rect_thing(canvas, x, y, width, height);
-            let vbuf = 50.0;
+            let vbuf = 0.0;
             let loc = (x as f32 + (x + width) as f32) * 0.5;
             let start = Point::new(loc, y as f32 + vbuf); // Start coordinates
             let end = Point::new(loc, (y + height) as f32 - vbuf); // End coordinates
             draw_line(canvas, start, end);
         }
         LayoutNode::Allowance(_) => {
-            // draw_rect_thing(canvas, x, y, width, height);
-            // draw_text_blob(canvas, &font_boss.main_font, x, y, "Allowance");
+            let items = vec![("Edward", 132345), ("Theo", 1354), ("Peter", 1339)];
+
+            for i in 0..items.len() {
+                let yoff = y + i as i32 * 50;
+
+                // draw_rect_thing(canvas, x, y, width, height);
+                draw_text_blob(canvas, &font_boss.main_font, x, yoff, items[i].0);
+                draw_text_blob_with_color(
+                    canvas,
+                    &font_boss.main_font,
+                    x + width - 25,
+                    yoff,
+                    &format_cents_commas(items[i].1),
+                    Color::BLACK,
+                    1.0,
+                );
+            }
         }
         LayoutNode::Countdown(_) => {
-            // draw_rect_thing(canvas, x, y, width, height);
-            draw_text_blob(canvas, &font_boss.emoji_font, x, y + 50, "🎂");
-            draw_text_blob(canvas, &font_boss.main_font, x + 40, y + 50, "Greg");
+            let items = vec![
+                ("🎄", "Christmas", "2025-12-25"),
+                ("🎂", "Greg's Birthday", "2025-12-31"),
+                ("🎉", "Martin Luther King Jr. Day", "2026-01-19"),
+                ("🐿️", "Groundhog Day", "2026-02-02"),
+                ("🐰", "Easter", "2026-04-05"),
+                ("🗽", "July 4", "2026-07-04"),
+            ];
+
+            for i in 0..items.len() {
+                let yoff = y + i as i32 * 50;
+
+                let target = NaiveDate::parse_from_str(items[i].2, "%Y-%m-%d").unwrap();
+                let diff = days_between(target);
+
+                // draw_rect_thing(canvas, x, y, width, height);
+                draw_text_blob(canvas, &font_boss.emoji_font, x, yoff - 2, items[i].0);
+                draw_text_blob(canvas, &font_boss.main_font, x + 45, yoff, items[i].1);
+                draw_text_blob_with_color(
+                    canvas,
+                    &font_boss.main_font,
+                    x + width - 25,
+                    yoff,
+                    &format!("{}", diff),
+                    Color::BLACK,
+                    1.0,
+                );
+            }
         }
         LayoutNode::Battery(_) => {
             // draw_rect_thing(canvas, x, y, width, height);
             // draw_text_blob(canvas, &font_boss.main_font, x, y, "Battery");
         }
         LayoutNode::Verse(_) => {
-            draw_verse(canvas, &font_boss, x, y, width, height);
+            draw_verse(canvas, x, y, width, height);
         }
     }
 }

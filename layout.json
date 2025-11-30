@@ -9,12 +9,12 @@
             "split": "vertical",
             "size": "1.5u",
             "entries": [
-                { "type": "weather", "size": "550px" },
+                { "type": "weather", "size": "565px" },
                 { "type": "verse", "size": "1u" }
             ]
         },
 
-        { "type": "vline", "size": "40px" },
+        { "type": "vline", "size": "50px" },
 
         {
             "type": "container",
