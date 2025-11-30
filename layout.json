@@ -14,7 +14,7 @@
             ]
         },
 
-        { "type": "vline", "size": "50px" },
+        { "type": "vline", "size": "40px" },
 
         {
             "type": "container",

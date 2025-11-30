@@ -36,6 +36,13 @@ fn days_between(date: NaiveDate) -> i64 {
 /// ---- Data model (from JSON) ----
 
 #[derive(Debug, Deserialize)]
+struct Person {
+    name: String,
+    balance: i64,
+    cleaning: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct SignificantDate {
     name: String,
     date: String,
@@ -91,6 +98,7 @@ pub struct DailyWeather {
 pub struct AllData {
     weather: WeatherResponse,
     significant_dates: Vec<SignificantDate>,
+    people: Vec<Person>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -705,7 +713,7 @@ fn draw_weather(
             draw_text_blob_with_color(
                 canvas,
                 &mini_font,
-                (x as f32 + 25.0 + i as f32 * 25.0) as i32,
+                (x as f32 + 45.0 + i as f32 * 25.0) as i32,
                 y + today_offset + 210,
                 &formatted,
                 Color::BLACK,
@@ -720,12 +728,15 @@ fn draw_weather(
     for i in 0..23 {
         temp_points.push(weather.hourly.temperature[i]);
     }
+    draw_text_blob(canvas, &font_boss.emoji_font, x + 10,
+        y + today_offset + 50,
+        "🌡️");
     draw_hourly(
         canvas,
         &mini_font,
-        x + 10,
+        x + 45,
         y + today_offset,
-        width - 20,
+        width - 25,
         hourly_height,
         &temp_points,
         "°",
@@ -735,12 +746,15 @@ fn draw_weather(
     for i in 0..23 {
         precip_points.push(weather.hourly.precipitation_probability[i] as f32);
     }
+    draw_text_blob(canvas, &font_boss.emoji_font, x + 10,
+        y + today_offset + hourly_height + 30 + 50,
+        "🌧️");
     draw_hourly(
         canvas,
         &mini_font,
-        x + 10,
+        x + 45,
         y + today_offset + hourly_height + 30,
-        width - 20,
+        width - 25,
         hourly_height,
         &precip_points,
         "%",
@@ -1044,6 +1058,56 @@ fn format_cents_commas(cents: i64) -> String {
     format!("${}.{:02}", dollar_str, remainder)
 }
 
+fn draw_people(
+    canvas: &mut Canvas,
+    font_boss: &FontBoss,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    data: &AllData,
+) {
+    for i in 0..data.people.len() {
+        let yoff = y + i as i32 * 50;
+        let person = &data.people[i];
+
+        draw_text_blob(canvas, &font_boss.main_font, x, yoff, &person.name);
+
+        for j in 0..person.cleaning.len() {
+            draw_text_blob(canvas, &font_boss.emoji_font, x + width - 205 + j as i32*40, yoff, &person.cleaning[j]);
+        }
+
+        draw_text_blob_with_color(
+            canvas,
+            &font_boss.main_font,
+            x + width - 240,
+            yoff,
+            &format_cents_commas(person.balance),
+            Color::BLACK,
+            1.0,
+        );
+    }
+    // let items = vec![("Edward", 132345), ("Theo", 1354), ("Peter", 1339)];
+
+    // for i in 0..items.len() {
+    //     let yoff = y + i as i32 * 50;
+
+    //     // draw_rect_thing(canvas, x, y, width, height);
+    //     draw_text_blob(canvas, &font_boss.main_font, x, yoff, items[i].0);
+    //     draw_text_blob_with_color(
+    //         canvas,
+    //         &font_boss.main_font,
+    //         x + width - 240,
+    //         yoff,
+    //         &format_cents_commas(items[i].1),
+    //         Color::BLACK,
+    //         1.0,
+    //     );
+
+    //     draw_text_blob(canvas, &font_boss.emoji_font, x + width - 210, yoff, "❓🤩😀😐❌➖");
+    // }
+}
+
 fn handle_child(
     canvas: &mut Canvas,
     font_boss: &FontBoss,
@@ -1118,25 +1182,7 @@ fn handle_child(
             draw_line(canvas, start, end);
         }
         LayoutNode::Allowance(_) => {
-            let items = vec![("Edward", 132345), ("Theo", 1354), ("Peter", 1339)];
-
-            for i in 0..items.len() {
-                let yoff = y + i as i32 * 50;
-
-                // draw_rect_thing(canvas, x, y, width, height);
-                draw_text_blob(canvas, &font_boss.main_font, x, yoff, items[i].0);
-                draw_text_blob_with_color(
-                    canvas,
-                    &font_boss.main_font,
-                    x + width - 240,
-                    yoff,
-                    &format_cents_commas(items[i].1),
-                    Color::BLACK,
-                    1.0,
-                );
-
-                draw_text_blob(canvas, &font_boss.emoji_font, x + width - 210, yoff, "❓🤩😀😐❌➖");
-            }
+            draw_people(canvas, font_boss, x, y, width, height, data);
         }
         LayoutNode::Countdown(_) => {
             let sig_dates = &data.significant_dates;
@@ -1180,11 +1226,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let data = fs::read_to_string("dates.json")?;
     let significant_dates: Vec<SignificantDate> = serde_json::from_str(&data)?;
 
+    let data = fs::read_to_string("people.json")?;
+    let people: Vec<Person> = serde_json::from_str(&data)?;
+
     for holiday in &significant_dates {
         println!("{} {} on {}", holiday.emoji, holiday.name, holiday.date);
     }
 
-    let data = AllData { weather: weather, significant_dates: significant_dates };
+    let data = AllData { weather: weather, significant_dates: significant_dates, people: people };
 
     // println!("{:#?}", weather.current.temperature);
 

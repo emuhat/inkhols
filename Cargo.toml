@@ -1,0 +1,11 @@
+[package]
+name = "inkhols"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+skia-safe = { version = "0.60.0", features = ["textlayout"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+resvg = "0.35"
+chrono = "0.4.42"
