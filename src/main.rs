@@ -1,6 +1,14 @@
 // src/main.rs
+// Use resvg's re-exported tiny-skia to avoid version conflicts
+use resvg::tiny_skia;
+use resvg::usvg;
+use resvg::Tree as ResvgTree; // Also use resvg's re-exported usvg
 use serde::Deserialize;
 use skia_safe::Color4f;
+use skia_safe::ImageInfo;
+use skia_safe::ColorType;
+use skia_safe::AlphaType;
+use resvg::usvg::TreeParsing;
 use skia_safe::Data;
 use skia_safe::Path;
 use skia_safe::gradient_shader;
@@ -12,6 +20,9 @@ use std::fs;
 use std::fs::File;
 use std::io::BufWriter;
 use std::io::Write;
+use skia_safe::Image;
+// use skia_safe::codec::Options;
+// use skia_safe::runtime_effect::Options;
 
 /// ---- Data model (from JSON) ----
 
@@ -23,10 +34,7 @@ pub struct WeatherResponse {
 
     pub current: CurrentWeather,
     pub hourly: HourlyWeather,
-}
-
-pub struct AllData {
-    weather: WeatherResponse,
+    pub daily: Option<DailyWeather>, // new
 }
 
 #[derive(Debug, Deserialize)]
@@ -34,10 +42,9 @@ pub struct CurrentWeather {
     pub time: String,
     pub interval: u32,
     pub apparent_temperature: f64,
-    pub precipitation: f64,
     #[serde(rename = "temperature_2m")]
     pub temperature: f64,
-    pub weather_code: u32,
+    pub weather_code: u8,
     #[serde(rename = "relative_humidity_2m")]
     pub relative_humidity: u32,
 }
@@ -50,6 +57,21 @@ pub struct HourlyWeather {
     pub weather_code: Vec<u32>,
     pub precipitation: Vec<f64>,
     pub precipitation_probability: Vec<u32>,
+}
+
+// New structs for daily data
+#[derive(Debug, Deserialize)]
+pub struct DailyWeather {
+    pub time: Vec<String>,
+    pub weather_code: Vec<u8>,
+    #[serde(rename = "temperature_2m_max")]
+    pub temperature_max: Vec<f64>,
+    #[serde(rename = "temperature_2m_min")]
+    pub temperature_min: Vec<f64>,
+}
+
+pub struct AllData {
+    weather: WeatherResponse,
 }
 
 #[derive(Debug, Deserialize)]
@@ -551,6 +573,28 @@ fn draw_temp_gradient(canvas: &mut Canvas, x: i32, y: i32, width: i32, height: i
     canvas.draw_rrect(rrect, &stroke_paint);
 }
 
+fn wmo_code_to_icon(code: u8) -> &'static str {
+    match code {
+        0 => "sunny-29.svg",                  // Clear sky
+        1 | 2 | 3 => "partly-cloudy-5.svg",   // Mainly clear, partly cloudy, overcast
+        45 | 48 => "fog-85.svg",              // Fog / depositing rime fog
+        51 | 53 | 55 => "light-rain-90.svg",  // Drizzle
+        56 | 57 => "sleet_03.svg",            // Freezing drizzle
+        61 | 63 | 65 => "shower-rain-1.svg",  // Rain showers
+        66 | 67 => "sleet_04.svg",            // Freezing rain
+        71 | 73 | 75 => "slight-snow_01.svg", // Snow fall
+        77 => "slight-snow.svg",              // Snow grains
+        80 | 81 | 82 => "shower-rain-1.svg",  // Rain showers
+        85 | 86 => "medium-snow_01.svg",      // Snow showers
+        95 => "thunderstorm-24.svg",          // Thunderstorm
+        96 | 99 => "thunder-47.svg",          // Thunderstorm with hail
+        // Some extreme / less common cases
+        61..=67 => "shower-rain-1.svg",
+        70..=79 => "medium-snow_01.svg",
+        _ => "partly-cloudy_01.svg",          // Default / unknown codes
+    }
+}
+
 fn draw_weather(
     canvas: &mut Canvas,
     font_boss: &FontBoss,
@@ -560,6 +604,13 @@ fn draw_weather(
     _height: i32,
     weather: &WeatherResponse,
 ) {
+    println!(" code {}", weather.current.weather_code);
+
+    let icon_file = format!("weather-icons/{}", wmo_code_to_icon(weather.current.weather_code));
+    let svg = svg_from_file(icon_file.as_str(), 75, 75, 1.0);
+
+    canvas.draw_image(&svg.unwrap().image, (x as f32 + 15.0, y as f32 + 10.0), None);
+
     let n_forecast_days = 7;
     let day_width = 100.0;
 
@@ -570,7 +621,7 @@ fn draw_weather(
     draw_text_blob(
         canvas,
         &mega_font,
-        x + 10,
+        x + 105,
         y + now_offset + 45,
         &format!("{}°", weather.current.temperature.round()),
     );
@@ -587,6 +638,7 @@ fn draw_weather(
         Color::BLACK,
         1.0
     );
+
     draw_text_blob_with_color(
         canvas,
         &font_boss.main_font,
@@ -696,6 +748,64 @@ fn draw_weather(
             Color::BLACK, 0.5
         );
     }
+}
+
+pub struct LoadedSvg {
+    image: Image, // Final pre-rendered Skia image
+    pub width: f32,
+    pub height: f32,
+}
+
+pub fn svg_from_file(
+    path: &str,
+    target_width: u32,
+    target_height: u32,
+    scalar: f32,
+) -> Result<LoadedSvg, Box<dyn std::error::Error>> {
+
+    let svg_data = std::fs::read(path)?;
+
+    let options = usvg::Options::default();
+    let usvg_tree = usvg::Tree::from_data(&svg_data, &options)?;
+    let resvg_tree = ResvgTree::from_usvg(&usvg_tree);
+
+    // Render to full target size
+    let mut pixmap =
+        tiny_skia::Pixmap::new(target_width, target_height).ok_or("Failed to create pixmap")?;
+
+    let svg_size = resvg_tree.size;
+    let scale_x = target_width as f32 / svg_size.width();
+    let scale_y = target_height as f32 / svg_size.height();
+    let scale = scale_x.min(scale_y) * scalar; // Maintain aspect ratio
+
+    // Calculate translation to center the scaled image
+    let scaled_width = svg_size.width() * scale;
+    let scaled_height = svg_size.height() * scale;
+
+    let transform = tiny_skia::Transform::from_translate(0.0, 0.0).post_scale(scale, scale);
+
+    resvg_tree.render(transform, &mut pixmap.as_mut());
+
+    // Convert pixmap to skia_safe::Image
+    let image_info = ImageInfo::new(
+        (target_width as i32, target_height as i32),
+        ColorType::RGBA8888,
+        AlphaType::Premul,
+        None,
+    );
+
+    let image = Image::from_raster_data(
+        &image_info,
+        Data::new_copy(pixmap.data()),
+        (target_width * 4) as usize,
+    )
+    .ok_or("Failed to create Skia image")?;
+
+    Ok(LoadedSvg {
+        image,
+        width: scaled_width as f32,
+        height: scaled_height as f32,
+    })
 }
 
 fn draw_verse(
