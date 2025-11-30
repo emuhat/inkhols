@@ -1110,6 +1110,8 @@ fn handle_child(
                     Color::BLACK,
                     1.0,
                 );
+
+                draw_text_blob(canvas, &font_boss.emoji_font, x + 100, yoff, "😍😀😐❌➖");
             }
         }
         LayoutNode::Countdown(_) => {
