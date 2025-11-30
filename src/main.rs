@@ -16,6 +16,8 @@ use skia_safe::{
     Canvas, Color, Font, Paint, PaintStyle, Point, RRect, Rect, Surface, TextBlob, TileMode,
     Typeface,
 };
+use chrono::NaiveDate;
+use chrono::Datelike; // For .weekday()
 use std::fs;
 use std::fs::File;
 use std::io::BufWriter;
@@ -65,9 +67,11 @@ pub struct DailyWeather {
     pub time: Vec<String>,
     pub weather_code: Vec<u8>,
     #[serde(rename = "temperature_2m_max")]
-    pub temperature_max: Vec<f64>,
+    pub temperature_max: Vec<f32>,
     #[serde(rename = "temperature_2m_min")]
-    pub temperature_min: Vec<f64>,
+    pub temperature_min: Vec<f32>,
+    #[serde(rename = "precipitation_probability_max")]
+    pub precipitation_probability: Vec<f64>,
 }
 
 pub struct AllData {
@@ -223,6 +227,7 @@ fn draw_line(canvas: &mut Canvas, start: Point, end: Point) {
     canvas.draw_line(start, end, &paint);
 }
 
+#[allow(dead_code)]
 fn draw_rect_thing(canvas: &mut Canvas, x: i32, y: i32, width: i32, height: i32) {
     let margin = 0; //6;
     let mut paint = Paint::default();
@@ -263,7 +268,7 @@ fn draw_text_blob_with_color(
     paint.set_anti_alias(true);
 
     let xoff = if align > 0.0 {
-        let ww = font.measure_str(text, Some(&paint)).0;
+        let ww = font.measure_str(text, None).0;
         -align * ww
     } else {
         0.0
@@ -595,6 +600,12 @@ fn wmo_code_to_icon(code: u8) -> &'static str {
     }
 }
 
+fn code_to_svg(code:u8, dim:u32) -> Result<LoadedSvg, Box<dyn std::error::Error>>
+{
+    let icon_file = format!("weather-icons/{}", wmo_code_to_icon(code));
+    svg_from_file(icon_file.as_str(), dim, dim, 1.0)
+}
+
 fn draw_weather(
     canvas: &mut Canvas,
     font_boss: &FontBoss,
@@ -606,13 +617,12 @@ fn draw_weather(
 ) {
     println!(" code {}", weather.current.weather_code);
 
-    let icon_file = format!("weather-icons/{}", wmo_code_to_icon(weather.current.weather_code));
-    let svg = svg_from_file(icon_file.as_str(), 75, 75, 1.0);
+    let svg = code_to_svg(weather.current.weather_code, 75);
 
     canvas.draw_image(&svg.unwrap().image, (x as f32 + 15.0, y as f32 + 10.0), None);
 
-    let n_forecast_days = 7;
-    let day_width = 100.0;
+
+
 
     let mini_font = FontBoss::load_font(20.0);
     let mega_font = FontBoss::load_font(100.0);
@@ -649,21 +659,22 @@ fn draw_weather(
         1.0
     );
 
-    for i in 0..n_forecast_days {
-        draw_text_blob(
-            canvas,
-            &mini_font,
-            (x as f32 + 25.0 + i as f32 * day_width) as i32,
-            y + 325,
-            "12 PM",
-        );
-    }
+    // let n_forecast_hours = 7;
+    // for i in 0..n_forecast_hours {
+    //     draw_text_blob(
+    //         canvas,
+    //         &mini_font,
+    //         (x as f32 + 25.0 + i as f32 * day_width) as i32,
+    //         y + 325,
+    //         "12 PM",
+    //     );
+    // }
 
     let today_offset = 110;
     let hourly_height = 80;
 
     // temperature curve for today
-    let mut temp_points: Vec<f32> = Vec::with_capacity(n_forecast_days);
+    let mut temp_points: Vec<f32> = Vec::new();
     temp_points.push(33.0);
     temp_points.push(33.0);
     temp_points.push(32.0);
@@ -725,28 +736,91 @@ fn draw_weather(
     //     draw_text_blob(canvas, &mini_font, x + 30 + i * 95, y + today_offset + 105, "12 PM");
     // }
 
-    let daily_height = 80;
-    for i in 0..n_forecast_days {
-        let px = x as f32 + 50.0 + i as f32 * day_width;
 
-        let x = px as i32 - 10;
-        let y = y as i32 + 350;
+    if let Some(daily) = &weather.daily {
 
-        draw_text_blob_with_color(canvas, &mini_font, x, y + 10, "80°", Color::BLACK, 0.5);
+        let day_width = 102.0;
 
-        draw_temp_gradient(canvas, x - 7, y + 20, 14, daily_height);
+        let weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-        draw_text_blob_with_color(canvas, &mini_font, x, y + daily_height + 40, "20°", Color::BLACK, 0.5);
+        let num_daily_pts = daily.time.len().min(7);
 
-        draw_text_blob_with_color(canvas, &mini_font, x, y + daily_height + 80, "83%", Color::BLACK, 0.5);
-        draw_text_blob_with_color(
-            canvas,
-            &font_boss.main_font,
-            x,
-            y + daily_height + 110,
-            "Sat",
-            Color::BLACK, 0.5
-        );
+        let mut max_temp: f32 = -99999999.0;
+        let mut min_temp: f32 = 99999999.0;
+        for i in 0..num_daily_pts {
+            max_temp = max_temp.max(daily.temperature_max[i]);
+            min_temp = min_temp.min(daily.temperature_max[i]);
+            max_temp = max_temp.max(daily.temperature_min[i]);
+            min_temp = min_temp.min(daily.temperature_min[i]);
+        }
+        let temp_range = max_temp - min_temp;
+
+        let max_daily_vpixels_allowed = 80;
+        let pixels_per_degree = max_daily_vpixels_allowed as f32 / temp_range;
+
+        println!("min max  {} {}", max_temp, min_temp);
+        println!("max degree range {}", temp_range);
+        println!("max pixels {}", max_daily_vpixels_allowed);
+        println!("pixels per degree {}", pixels_per_degree);
+
+
+
+
+        for i in 0..num_daily_pts {
+
+            // Parse the string into a NaiveDate
+            let date = NaiveDate::parse_from_str(&daily.time[i], "%Y-%m-%d").expect("Invalid date");
+
+            // Get the weekday (0 = Monday, 6 = Sunday if you want ISO, or 0 = Sunday with .num_days_from_sunday())
+            let weekday = date.weekday().num_days_from_sunday();
+
+            let px = x as f32 + 62.0 + i as f32 * day_width;
+            let x = px as i32 - 10;
+            let y = y as i32 + 350;
+
+            let temp_diff = 5.0; //max_temp - daily.temperature_max[i] as f32;
+
+            let qdiff = max_temp - daily.temperature_max[i] as f32;
+
+            let vpushdown = qdiff * pixels_per_degree;
+
+            println!( "   {}: {}-{}, {}", i, daily.temperature_min[i], daily.temperature_max[i], qdiff);
+
+
+
+            let this_grad_off = vpushdown as i32;
+            let this_diff = daily.temperature_max[i] - daily.temperature_min[i];
+            let this_daily_height = (pixels_per_degree * this_diff) as i32;
+
+            draw_text_blob_with_color(canvas, &mini_font, x, y + this_grad_off, &format!("{}°", daily.temperature_max[i].round()), Color::BLACK, 0.5);
+
+            draw_temp_gradient(canvas, x - 7, y + this_grad_off + 10, 14, this_daily_height);
+
+            draw_text_blob_with_color(canvas, &mini_font, x, y + this_grad_off + this_daily_height + 32, &format!("{}°", daily.temperature_min[i].round()), Color::BLACK, 0.5);
+
+            let precip_text = format!("{}%", daily.precipitation_probability[i].round());
+
+            let svg_width = 25;
+            let label_margin = 7.0;
+            let precip_height = 50;
+            let day_label_width = svg_width as f32 + mini_font.measure_str(&precip_text, None).0 + 5.0;
+            let half_width = day_label_width * 0.5;
+            let label_start = x as f32 - half_width;
+
+            let svg = code_to_svg(daily.weather_code[i], svg_width);
+            canvas.draw_image(&svg.unwrap().image, (label_start, (y + max_daily_vpixels_allowed + precip_height) as f32 + 10.0), None);
+
+            draw_text_blob_with_color(
+                canvas,
+                &mini_font,
+                (label_start + label_margin) as i32 + svg_width as i32,
+                y + max_daily_vpixels_allowed + precip_height + 29,
+                &precip_text,
+                Color::BLACK, 0.0
+            );
+
+            draw_text_blob_with_color(canvas, &font_boss.main_font, x, y + max_daily_vpixels_allowed + 110, weekdays[weekday as usize], Color::BLACK, 0.5);
+        }
     }
 }
 
@@ -816,6 +890,8 @@ fn draw_verse(
     _width: i32,
     _height: i32,
 ) {
+    // draw_rect_thing(canvas, x, y, width, height);
+
     let y_off = 40;
     draw_text_blob(
         canvas,
@@ -924,8 +1000,8 @@ fn handle_child(
             // canvas.draw_rrect(rrect, &paint);
         }
         LayoutNode::Todo(_) => {
-            draw_rect_thing(canvas, x, y, width, height);
-            draw_text_blob(canvas, &font_boss.main_font, x, y, "Todo list");
+            // draw_rect_thing(canvas, x, y, width, height);
+            // draw_text_blob(canvas, &font_boss.main_font, x, y, "Todo list");
         }
         LayoutNode::Weather(_) => {
             draw_weather(canvas, &font_boss, x, y, width, height, &data.weather);
@@ -947,17 +1023,17 @@ fn handle_child(
             draw_line(canvas, start, end);
         }
         LayoutNode::Allowance(_) => {
-            draw_rect_thing(canvas, x, y, width, height);
-            draw_text_blob(canvas, &font_boss.main_font, x, y, "Allowance");
+            // draw_rect_thing(canvas, x, y, width, height);
+            // draw_text_blob(canvas, &font_boss.main_font, x, y, "Allowance");
         }
         LayoutNode::Countdown(_) => {
-            draw_rect_thing(canvas, x, y, width, height);
-            draw_text_blob(canvas, &font_boss.emoji_font, x, y, "🎂");
-            draw_text_blob(canvas, &font_boss.main_font, x + 40, y, "Greg");
+            // draw_rect_thing(canvas, x, y, width, height);
+            draw_text_blob(canvas, &font_boss.emoji_font, x, y + 50, "🎂");
+            draw_text_blob(canvas, &font_boss.main_font, x + 40, y + 50, "Greg");
         }
         LayoutNode::Battery(_) => {
-            draw_rect_thing(canvas, x, y, width, height);
-            draw_text_blob(canvas, &font_boss.main_font, x, y, "Battery");
+            // draw_rect_thing(canvas, x, y, width, height);
+            // draw_text_blob(canvas, &font_boss.main_font, x, y, "Battery");
         }
         LayoutNode::Verse(_) => {
             draw_verse(canvas, &font_boss, x, y, width, height);
