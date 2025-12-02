@@ -21,10 +21,11 @@
             "split": "vertical",
             "size": "1u",
             "entries": [
-                { "type": "date", "size": "100px" },
+                { "type": "date", "size": "32px" },
+                { "type": "hline", "size": "50px" },
                 {
                     "type": "allowance",
-                    "size": "120px"
+                    "size": "155px"
                 },
                 { "type": "hline", "size": "50px" },
                 {
