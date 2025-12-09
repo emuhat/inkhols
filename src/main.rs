@@ -24,6 +24,8 @@ use skia_safe::ImageInfo;
 use skia_safe::Path;
 use skia_safe::gradient_shader;
 use skia_safe::image::CachingHint;
+use chrono::DateTime;
+use chrono::Utc;
 use skia_safe::{
     Canvas, Color, Font, Paint, PaintStyle, Point, RRect, Rect, Surface, TextBlob, TileMode,
     Typeface,
@@ -521,18 +523,14 @@ fn draw_hourly(
     height: i32,
     values: &[f32],
     symbol: &str,
+    range: (f32, f32)
 ) {
     // draw_rect_thing(canvas, x, y, width, height);
 
-    let margin = 15;
-    let dp_width = ((width - margin * 2) as f32) / (values.len() - 1) as f32;
+    let dp_width = (width as f32) / (values.len() - 1) as f32;
 
-    let mut min: f32 = 999999.0;
-    let mut max: f32 = -999999.0;
-    for value in values {
-        min = min.min(*value);
-        max = max.max(*value);
-    }
+    let (min, max) = range;
+
     let vsize = max - min;
 
     println!("min {} max {} vsize {}", min, max, vsize);
@@ -543,8 +541,9 @@ fn draw_hourly(
     let mut temp_points: Vec<Point> = Vec::with_capacity(values.len());
     for i in 0..values.len() {
         let val = (values[i] - min) / vsize;
-        let px = (x + margin) as f32 + i as f32 * dp_width;
-        let py = graph_offset + val * graph_height as f32;
+
+        let px = x as f32 + i as f32 * dp_width;
+        let py = graph_offset + (1.0 - val) * graph_height as f32;
         temp_points.push(Point::new(px, py));
 
         // draw_filled_circle(canvas, Point::new(px, py), 5.0);
@@ -557,18 +556,20 @@ fn draw_hourly(
     );
 
     for i in 0..values.len() {
+        let pct = i as f32 / (values.len()-1) as f32;
         let val = (values[i] - min) / vsize;
-        let px = (x + margin) as f32 + i as f32 * dp_width;
+        let px = x as f32 + i as f32 * dp_width;
         let py = graph_offset + val * graph_height as f32;
-        if i % 3 == 0 {
+        if i % 2 == 0
+        {
             draw_text_blob_with_color(
                 canvas,
                 &mini_font,
-                px as i32 - 6,
-                py as i32 - 11,
+                px as i32,
+                (graph_offset + graph_height) as i32 + 28,
                 &format!("{}{}", values[i].round(), symbol),
                 Color::from_rgb(128, 128, 128),
-                0.0,
+                pct,
             );
         }
     }
@@ -621,7 +622,7 @@ fn draw_box_with_gradient(
 
     // --- Black outline ---
     let mut stroke_paint = Paint::default();
-    stroke_paint.set_color(Color::from_argb(80, 0, 0, 0));
+    stroke_paint.set_color(Color::BLACK);
     stroke_paint.set_anti_alias(true);
     stroke_paint.set_style(PaintStyle::Stroke);
     stroke_paint.set_stroke_width(2.0);
@@ -668,6 +669,45 @@ fn code_to_svg(code: u8, dim: u32) -> Result<LoadedSvg, Box<dyn std::error::Erro
     svg_from_file(icon_file.as_str(), dim, dim, 1.0)
 }
 
+fn get_temp_range(values: &[f32]) -> (f32, f32)
+{
+    let min_range = 30.0;
+
+    let mut min: f32 = 999999.0;
+    let mut max: f32 = -999999.0;
+    for value in values {
+        min = min.min(*value);
+        max = max.max(*value);
+    }
+
+    let diff = max - min;
+    // println!("DIFF {} of {}", diff, min_range);
+
+    if diff < min_range {
+
+        let missing = min_range - diff;
+        let missing_half = missing * 0.5;
+
+        min -= missing_half;
+        max += missing_half;
+    }
+
+    (min, max)
+}
+
+
+fn draw_weather_wrapped(
+    canvas: &mut Canvas,
+    font_boss: &FontBoss,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    weather: &WeatherResponse,
+) {
+    let _ = draw_weather(canvas, font_boss, x, y, width, height, weather);
+}
+
 fn draw_weather(
     canvas: &mut Canvas,
     font_boss: &FontBoss,
@@ -676,7 +716,7 @@ fn draw_weather(
     width: i32,
     _height: i32,
     weather: &WeatherResponse,
-) {
+) -> bool {
     println!(" code {}", weather.current.weather_code);
 
     let svg = code_to_svg(weather.current.weather_code, 75);
@@ -725,9 +765,72 @@ fn draw_weather(
     let today_offset = 110;
     let hourly_height = 80;
 
-    let n_forecast_hours = 24;
-    for i in 0..n_forecast_hours {
-        println!(" >> {}", weather.hourly.time[i]);
+
+
+    // 1) Get current time (timezone-aware)
+    let now_local: DateTime<Local> = Local::now();
+    let now_utc: DateTime<Utc> = Utc::now();
+    let naive_local: NaiveDateTime = now_local.naive_local();
+
+    println!("local now = {}", now_local);
+    println!("utc   now = {}", now_utc);
+
+    println!("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~");
+
+    let mut opt_hourly_start_index: Option<usize> = None;
+    for i in 0..weather.hourly.time.len() {
+
+        println!("dsfdsf  {}", weather.hourly.time[i]);
+
+        // Parse as a naive datetime (no timezone)
+        let dt = NaiveDateTime::parse_from_str(&weather.hourly.time[i], "%Y-%m-%dT%H:%M")
+            .expect("Failed to parse datetime");
+
+        if naive_local < dt {
+            break;
+        }
+
+        opt_hourly_start_index = Some(i);
+    }
+
+
+
+    if opt_hourly_start_index.is_none() {
+        return false;
+    }
+
+    let hourly_start_index = opt_hourly_start_index.unwrap();
+
+    let n_forecast_hours = 23;
+    let hourly_stop_index = (hourly_start_index + n_forecast_hours).min( weather.hourly.time.len() );
+
+
+    let hourly_x_start = x + 50;
+    let hourly_width = width - 47;
+    let num_hours = hourly_stop_index - hourly_start_index;
+
+    println!("the thing starts at {}", hourly_start_index);
+    println!("the thing stops at {}", hourly_stop_index);
+    println!("num_hours {}", num_hours);
+
+
+    let hourly_slot_width = hourly_width as f32 / (num_hours - 1) as f32;
+
+    println!("hourly_x_start {}", hourly_x_start);
+    println!("hourly_slot_width {}", hourly_slot_width);
+
+    let mut precip_points: Vec<f32> = Vec::new();
+    let mut temp_points: Vec<f32> = Vec::new();
+
+    for i in hourly_start_index..hourly_stop_index {
+        temp_points.push(weather.hourly.temperature[i]);
+        precip_points.push(weather.hourly.precipitation_probability[i] as f32);
+
+        let index = i - hourly_start_index;
+        let pct = index as f32 / (num_hours-1) as f32;
+        println!(" >> {} -- {}", weather.hourly.time[i], pct);
+
+
 
         // Parse as a naive datetime (no timezone)
         let dt = NaiveDateTime::parse_from_str(&weather.hourly.time[i], "%Y-%m-%dT%H:%M")
@@ -735,88 +838,64 @@ fn draw_weather(
 
         // Format as 12-hour with AM/PM
         let formatted = dt.format("%-I %p").to_string(); // %-I = hour without leading zero
+        // let formatted = dt.format("%-I").to_string();
 
         println!("{formatted}"); // "12 AM"
 
-        if i % 4 == 0 {
+        if (index+3) % 4 == 0
+        {
             draw_text_blob_with_color(
                 canvas,
                 &mini_font,
-                (x as f32 + 45.0 + i as f32 * 25.0) as i32,
-                y + today_offset + 210,
+                (hourly_x_start as f32 + index as f32 * hourly_slot_width) as i32,
+                y + today_offset,
                 &formatted,
                 Color::BLACK,
-                0.0,
+                0.5,
             );
         }
     }
 
     // temperature curve for today
-    let mut temp_points: Vec<f32> = Vec::new();
-    for i in 0..23 {
-        temp_points.push(weather.hourly.temperature[i]);
-    }
+    let range = get_temp_range(&temp_points);
     draw_text_blob(
         canvas,
         &font_boss.emoji_font,
         x + 10,
-        y + today_offset + 50,
+        y + today_offset + 60,
         "🌡️",
     );
     draw_hourly(
         canvas,
         &mini_font,
-        x + 45,
-        y + today_offset,
-        width - 25,
+        hourly_x_start,
+        y + today_offset + 10,
+        hourly_width,
         hourly_height,
         &temp_points,
         "°",
+        range
     );
 
-    let mut precip_points: Vec<f32> = Vec::new();
-    for i in 0..23 {
-        precip_points.push(weather.hourly.precipitation_probability[i] as f32);
-    }
     draw_text_blob(
         canvas,
         &font_boss.emoji_font,
         x + 10,
-        y + today_offset + hourly_height + 30 + 50,
+        y + today_offset + hourly_height + 30 + 60,
         "💧",
     );
     draw_hourly(
         canvas,
         &mini_font,
-        x + 45,
-        y + today_offset + hourly_height + 30,
-        width - 25,
+        hourly_x_start,
+        y + today_offset + hourly_height + 40,
+        hourly_width,
         hourly_height,
         &precip_points,
         "%",
+        (0.0, 100.0)
     );
 
-    // draw_catmull_rom_curve(canvas, &temp_points);
-
-    // precip curve for today
-    // let precip_offset = 90;
-    // let precip_height = 20.0;
-    // let mut precip_points: Vec<Point> = Vec::with_capacity(n_forecast_days);
-    // let n_forecast_hours = 24;
-    // for i in 0..n_forecast_hours {
-    //     let px = x as f32 + 30.0 + i as f32 * 28.0;
-    //     let py = y as f32 + today_offset as f32 + ((i as f32 * 50.0).sin() * precip_height + precip_height*0.5 + precip_offset as f32);
-    //     precip_points.push(Point::new(px, py));
-
-    //     if i % 2 == 0 {
-    //         draw_text_blob(canvas, &mini_font, px as i32, y + precip_offset, "32");
-    //     }
-    // }
-    // draw_catmull_rom_curve(canvas, &precip_points);
-
-    // for i in 0..7 {
-    //     draw_text_blob(canvas, &mini_font, x + 30 + i * 95, y + today_offset + 105, "12 PM");
-    // }
 
     if let Some(daily) = &weather.daily {
         let day_width = 102.0;
@@ -869,7 +948,7 @@ fn draw_weather(
                 canvas,
                 &mini_font,
                 x,
-                y + this_grad_off,
+                y + this_grad_off + 2,
                 &format!("{}°", daily.temperature_max[i].round()),
                 Color::BLACK,
                 0.5,
@@ -881,7 +960,7 @@ fn draw_weather(
                 canvas,
                 &mini_font,
                 x,
-                y + this_grad_off + this_daily_height + 32,
+                y + this_grad_off + this_daily_height + 28,
                 &format!("{}°", daily.temperature_min[i].round()),
                 Color::BLACK,
                 0.5,
@@ -900,7 +979,7 @@ fn draw_weather(
             let svg = code_to_svg(daily.weather_code[i], svg_width);
             canvas.draw_image(
                 &svg.unwrap().image,
-                (label_start, (y + precip_height) as f32 + 10.0),
+                (label_start, (y + precip_height) as f32 + 20.0),
                 None,
             );
 
@@ -908,7 +987,7 @@ fn draw_weather(
                 canvas,
                 &mini_font,
                 (label_start + label_margin) as i32 + svg_width as i32,
-                y + precip_height + 29,
+                y + precip_height + 39,
                 &precip_text,
                 Color::BLACK,
                 0.0,
@@ -918,13 +997,15 @@ fn draw_weather(
                 canvas,
                 &font_boss.main_font,
                 x,
-                y + precip_height + 60,
+                y + precip_height + 70,
                 WEEKDAYS3[weekday as usize],
                 Color::BLACK,
                 0.5,
             );
         }
     }
+
+    true
 }
 
 pub struct LoadedSvg {
@@ -1231,14 +1312,14 @@ fn draw_date(canvas: &mut Canvas, font_boss: &FontBoss, x: i32, y: i32, width: i
     let font = FontBoss::load_font(35.0);
     let bold_font = FontBoss::load_bold_font(35.0);
 
-    let wday_text = "Saturday,";
-    let date_text = "November 29,";
+    let wday_text = "Saturday";
+    let date_text = "November 29";
     let year_text = "2025";
 
     let wday = font.measure_str(&wday_text, None).0;
     let date = bold_font.measure_str(&date_text, None).0;
     let year = font.measure_str(&year_text, None).0;
-    let space = font.measure_str(" ", None).0;
+    let space = font.measure_str(" ", None).0 * 1.5;
 
     let lh = line_height(&font);
 
