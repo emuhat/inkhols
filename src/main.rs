@@ -10,8 +10,6 @@ use chrono::Local;
 use chrono::NaiveDate;
 use chrono::NaiveDateTime;
 use chrono::Utc;
-use flate2::Compression;
-use flate2::write::GzEncoder;
 use resvg::Tree as ResvgTree; // Also use resvg's re-exported usvg
 use resvg::tiny_skia;
 use resvg::usvg;
@@ -42,6 +40,7 @@ use std::io;
 use std::io::BufWriter;
 use std::io::Write;
 use std::path::Path as FsPath;
+use miniz_oxide::deflate::compress_to_vec_zlib;
 // use skia_safe::codec::Options;
 // use skia_safe::runtime_effect::Options;
 
@@ -1757,20 +1756,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("Failed to read pixels".into());
     }
 
-    // Write red channel to gzipped file
-    let file = File::create("red_channel.bin.gz")?;
-    let buf_writer = BufWriter::new(file);
-
-    // Use GzEncoder with default compression
-    let mut encoder = GzEncoder::new(buf_writer, Compression::default());
-    encoder.write_all(&red_channel)?;
-    encoder.finish()?; // finish() writes the gzip footer and returns the inner writer
-
-    // Write red channel to binary file
-    // let file = File::create("red_channel.bin")?;
-    // let mut writer = BufWriter::new(file);
-    // writer.write_all(&red_channel)?;
-    // writer.flush()?;
+    let compressed = compress_to_vec_zlib(&red_channel, 8);
+    let mut file = File::create("red_channel.mz")?;
+    file.write_all(&compressed)?;
 
     let data = image
         .encode_to_data(skia_safe::EncodedImageFormat::PNG)
