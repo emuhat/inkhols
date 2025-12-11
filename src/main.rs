@@ -6,6 +6,7 @@
 // Use resvg's re-exported tiny-skia to avoid version conflicts
 use chrono::DateTime;
 use chrono::Datelike; // For .weekday()
+use chrono::Duration;
 use chrono::Local;
 use chrono::NaiveDate;
 use chrono::NaiveDateTime;
@@ -17,6 +18,8 @@ use resvg::tiny_skia;
 use resvg::usvg;
 use resvg::usvg::TreeParsing;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
+use serde_json::Value;
 use skia_safe::AlphaType;
 use skia_safe::Color4f;
 use skia_safe::ColorType;
@@ -32,20 +35,28 @@ use skia_safe::{
 };
 use std::fs;
 use std::fs::File;
+use std::io;
 use std::io::BufWriter;
 use std::io::Write;
 // use skia_safe::codec::Options;
 // use skia_safe::runtime_effect::Options;
 
-fn days_between(date: NaiveDate) -> i64 {
-    let today = Local::now().date_naive();
-    (date - today).num_days()
+/// ---- Data model (from JSON) ----
+
+#[derive(Debug, Deserialize)]
+pub struct LastGood {
+    pub fetched_at: DateTime<Utc>,
+    pub expires: Option<DateTime<Utc>>,
+    pub data: Value,
 }
 
-const WEEKDAYS2: [&str; 7] = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
-const WEEKDAYS3: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-/// ---- Data model (from JSON) ----
+#[derive(Debug, Deserialize)]
+pub struct StateEnvelope {
+    pub status: String,
+    pub fetched_at: DateTime<Utc>,
+    pub error: Option<String>,
+    pub last_good: Option<LastGood>,
+}
 
 #[derive(Debug, Deserialize)]
 struct Person {
@@ -109,6 +120,7 @@ pub struct DailyWeather {
 
 pub struct AllData {
     weather: WeatherResponse,
+    weather_age_hours: f64,
     significant_dates: Vec<SignificantDate>,
     people: Vec<Person>,
 }
@@ -252,6 +264,14 @@ fn scaled_from(size: &Size) -> f64 {
 }
 
 /// ---- Rendering helpers ----
+
+fn days_between(date: NaiveDate) -> i64 {
+    let today = Local::now().date_naive();
+    (date - today).num_days()
+}
+
+const WEEKDAYS2: [&str; 7] = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+const WEEKDAYS3: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 fn draw_line(canvas: &mut Canvas, start: Point, end: Point) {
     let mut paint = Paint::default();
@@ -700,8 +720,23 @@ fn draw_weather_wrapped(
     width: i32,
     height: i32,
     weather: &WeatherResponse,
+    weather_age_hours: f64,
 ) {
-    let _ = draw_weather(canvas, font_boss, x, y, width, height, weather);
+    let too_old = weather_age_hours > 1.0;
+
+    let success = !too_old && draw_weather(canvas, font_boss, x, y, width, height, weather);
+
+    if too_old || !success {
+        draw_text_blob(canvas, &font_boss.emoji_font, x + 20, y + 40, "😞");
+
+        draw_text_blob(
+            canvas,
+            &font_boss.main_font,
+            x + 70,
+            y + 40,
+            "Problem getting weather",
+        );
+    }
 }
 
 fn draw_weather(
@@ -1383,7 +1418,16 @@ fn handle_child(
             // draw_text_blob(canvas, &font_boss.main_font, x, y, "Todo list");
         }
         LayoutNode::Weather(_) => {
-            draw_weather_wrapped(canvas, &font_boss, x, y, width, height, &data.weather);
+            draw_weather_wrapped(
+                canvas,
+                &font_boss,
+                x,
+                y,
+                width,
+                height,
+                &data.weather,
+                data.weather_age_hours,
+            );
         }
         LayoutNode::HLine(_) => {
             // draw_rect_thing(canvas, x, y, width, height);
@@ -1449,11 +1493,31 @@ fn handle_child(
     }
 }
 
+/// Read the inner payload of an envelope file and return (payload, hours_old)
+pub fn read_envelope<T: DeserializeOwned>(path: &str) -> io::Result<(T, f64)> {
+    let content = fs::read_to_string(path)?;
+    let envelope: StateEnvelope =
+        serde_json::from_str(&content).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+    let last_good = envelope
+        .last_good
+        .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "No last_good data in envelope"))?;
+
+    let payload: T = serde_json::from_value(last_good.data)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+    let now = Utc::now();
+    let age = now.signed_duration_since(last_good.fetched_at);
+    let hours_old = age.num_seconds() as f64 / 3600.0;
+
+    Ok((payload, hours_old))
+}
+
 /// ---- Main: read layout.json -> render -> save PNG ----
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let json = std::fs::read_to_string("weather.json")?;
-    let weather: WeatherResponse = serde_json::from_str(&json)?;
+    let (weather, weather_age_hours) = read_envelope::<WeatherResponse>("weather.json")?;
+    println!("Data is {:.1} hours old", weather_age_hours);
 
     let data = fs::read_to_string("dates.json")?;
     let significant_dates: Vec<SignificantDate> = serde_json::from_str(&data)?;
@@ -1467,6 +1531,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let data = AllData {
         weather: weather,
+        weather_age_hours: weather_age_hours,
         significant_dates: significant_dates,
         people: people,
     };
