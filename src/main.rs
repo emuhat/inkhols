@@ -4,10 +4,12 @@
 
 // src/main.rs
 // Use resvg's re-exported tiny-skia to avoid version conflicts
+use chrono::DateTime;
 use chrono::Datelike; // For .weekday()
 use chrono::Local;
 use chrono::NaiveDate;
 use chrono::NaiveDateTime;
+use chrono::Utc;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use resvg::Tree as ResvgTree; // Also use resvg's re-exported usvg
@@ -24,8 +26,6 @@ use skia_safe::ImageInfo;
 use skia_safe::Path;
 use skia_safe::gradient_shader;
 use skia_safe::image::CachingHint;
-use chrono::DateTime;
-use chrono::Utc;
 use skia_safe::{
     Canvas, Color, Font, Paint, PaintStyle, Point, RRect, Rect, Surface, TextBlob, TileMode,
     Typeface,
@@ -523,7 +523,7 @@ fn draw_hourly(
     height: i32,
     values: &[f32],
     symbol: &str,
-    range: (f32, f32)
+    range: (f32, f32),
 ) {
     // draw_rect_thing(canvas, x, y, width, height);
 
@@ -556,12 +556,11 @@ fn draw_hourly(
     );
 
     for i in 0..values.len() {
-        let pct = i as f32 / (values.len()-1) as f32;
-        let val = (values[i] - min) / vsize;
+        let pct = i as f32 / (values.len() - 1) as f32;
+        // let val = (values[i] - min) / vsize;
         let px = x as f32 + i as f32 * dp_width;
-        let py = graph_offset + val * graph_height as f32;
-        if i % 2 == 0
-        {
+        // let py = graph_offset + val * graph_height as f32;
+        if i % 2 == 0 {
             draw_text_blob_with_color(
                 canvas,
                 &mini_font,
@@ -669,8 +668,7 @@ fn code_to_svg(code: u8, dim: u32) -> Result<LoadedSvg, Box<dyn std::error::Erro
     svg_from_file(icon_file.as_str(), dim, dim, 1.0)
 }
 
-fn get_temp_range(values: &[f32]) -> (f32, f32)
-{
+fn get_temp_range(values: &[f32]) -> (f32, f32) {
     let min_range = 30.0;
 
     let mut min: f32 = 999999.0;
@@ -684,7 +682,6 @@ fn get_temp_range(values: &[f32]) -> (f32, f32)
     // println!("DIFF {} of {}", diff, min_range);
 
     if diff < min_range {
-
         let missing = min_range - diff;
         let missing_half = missing * 0.5;
 
@@ -694,7 +691,6 @@ fn get_temp_range(values: &[f32]) -> (f32, f32)
 
     (min, max)
 }
-
 
 fn draw_weather_wrapped(
     canvas: &mut Canvas,
@@ -765,8 +761,6 @@ fn draw_weather(
     let today_offset = 110;
     let hourly_height = 80;
 
-
-
     // 1) Get current time (timezone-aware)
     let now_local: DateTime<Local> = Local::now();
     let now_utc: DateTime<Utc> = Utc::now();
@@ -779,7 +773,6 @@ fn draw_weather(
 
     let mut opt_hourly_start_index: Option<usize> = None;
     for i in 0..weather.hourly.time.len() {
-
         println!("dsfdsf  {}", weather.hourly.time[i]);
 
         // Parse as a naive datetime (no timezone)
@@ -793,8 +786,6 @@ fn draw_weather(
         opt_hourly_start_index = Some(i);
     }
 
-
-
     if opt_hourly_start_index.is_none() {
         return false;
     }
@@ -802,8 +793,7 @@ fn draw_weather(
     let hourly_start_index = opt_hourly_start_index.unwrap();
 
     let n_forecast_hours = 23;
-    let hourly_stop_index = (hourly_start_index + n_forecast_hours).min( weather.hourly.time.len() );
-
+    let hourly_stop_index = (hourly_start_index + n_forecast_hours).min(weather.hourly.time.len());
 
     let hourly_x_start = x + 50;
     let hourly_width = width - 47;
@@ -812,7 +802,6 @@ fn draw_weather(
     println!("the thing starts at {}", hourly_start_index);
     println!("the thing stops at {}", hourly_stop_index);
     println!("num_hours {}", num_hours);
-
 
     let hourly_slot_width = hourly_width as f32 / (num_hours - 1) as f32;
 
@@ -827,10 +816,8 @@ fn draw_weather(
         precip_points.push(weather.hourly.precipitation_probability[i] as f32);
 
         let index = i - hourly_start_index;
-        let pct = index as f32 / (num_hours-1) as f32;
+        let pct = index as f32 / (num_hours - 1) as f32;
         println!(" >> {} -- {}", weather.hourly.time[i], pct);
-
-
 
         // Parse as a naive datetime (no timezone)
         let dt = NaiveDateTime::parse_from_str(&weather.hourly.time[i], "%Y-%m-%dT%H:%M")
@@ -842,8 +829,7 @@ fn draw_weather(
 
         println!("{formatted}"); // "12 AM"
 
-        if (index+3) % 4 == 0
-        {
+        if (index + 3) % 4 == 0 {
             draw_text_blob_with_color(
                 canvas,
                 &mini_font,
@@ -874,7 +860,7 @@ fn draw_weather(
         hourly_height,
         &temp_points,
         "°",
-        range
+        range,
     );
 
     draw_text_blob(
@@ -893,9 +879,8 @@ fn draw_weather(
         hourly_height,
         &precip_points,
         "%",
-        (0.0, 100.0)
+        (0.0, 100.0),
     );
-
 
     if let Some(daily) = &weather.daily {
         let day_width = 102.0;
@@ -1245,7 +1230,7 @@ fn draw_people(
     x: i32,
     y: i32,
     width: i32,
-    height: i32,
+    _height: i32,
     data: &AllData,
 ) {
     let mini_font = FontBoss::load_font(20.0);
@@ -1308,7 +1293,7 @@ fn draw_people(
     // }
 }
 
-fn draw_date(canvas: &mut Canvas, font_boss: &FontBoss, x: i32, y: i32, width: i32, height: i32) {
+fn draw_date(canvas: &mut Canvas, _font_boss: &FontBoss, x: i32, y: i32, width: i32, _height: i32) {
     let font = FontBoss::load_font(35.0);
     let bold_font = FontBoss::load_bold_font(35.0);
 
@@ -1398,7 +1383,7 @@ fn handle_child(
             // draw_text_blob(canvas, &font_boss.main_font, x, y, "Todo list");
         }
         LayoutNode::Weather(_) => {
-            draw_weather(canvas, &font_boss, x, y, width, height, &data.weather);
+            draw_weather_wrapped(canvas, &font_boss, x, y, width, height, &data.weather);
         }
         LayoutNode::HLine(_) => {
             // draw_rect_thing(canvas, x, y, width, height);
