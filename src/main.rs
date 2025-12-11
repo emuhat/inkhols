@@ -6,7 +6,6 @@
 // Use resvg's re-exported tiny-skia to avoid version conflicts
 use chrono::DateTime;
 use chrono::Datelike; // For .weekday()
-use chrono::Duration;
 use chrono::Local;
 use chrono::NaiveDate;
 use chrono::NaiveDateTime;
@@ -17,6 +16,7 @@ use resvg::Tree as ResvgTree; // Also use resvg's re-exported usvg
 use resvg::tiny_skia;
 use resvg::usvg;
 use resvg::usvg::TreeParsing;
+use rusqlite::{Connection, Result, params};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -35,9 +35,13 @@ use skia_safe::{
 };
 use std::fs;
 use std::fs::File;
+use std::hash::DefaultHasher;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::io;
 use std::io::BufWriter;
 use std::io::Write;
+use std::path::Path as FsPath;
 // use skia_safe::codec::Options;
 // use skia_safe::runtime_effect::Options;
 
@@ -212,6 +216,38 @@ impl<'de> Deserialize<'de> for Size {
     }
 }
 
+/// Deterministically maps a 64-bit integer to a row id between 0 and count-1
+fn seed_to_index(seed: u64, count: i64) -> i64 {
+    // Just modulo to wrap around row count
+    (seed % (count as u64)) as i64
+}
+
+fn get_verse_by_seed<P: AsRef<FsPath>>(db_path: P, seed: u64) -> Result<Option<(String, String)>> {
+    let conn = Connection::open(db_path)?;
+
+    // Count total rows
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM verses", [], |row| row.get(0))?;
+
+    if count == 0 {
+        return Ok(None);
+    }
+
+    let index = seed_to_index(seed, count);
+
+    // SQLite rowid starts at 1; deterministic offset
+    // Use LIMIT 1 OFFSET ?
+    let mut stmt = conn.prepare("SELECT reference, text FROM verses LIMIT 1 OFFSET ?")?;
+    let mut rows = stmt.query(params![index])?;
+
+    if let Some(row) = rows.next()? {
+        let reference: String = row.get(0)?;
+        let text: String = row.get(1)?;
+        Ok(Some((reference, text)))
+    } else {
+        Ok(None)
+    }
+}
+
 /// ---- Trait-based size access to remove boilerplate ----
 
 trait HasSize {
@@ -273,13 +309,17 @@ fn days_between(date: NaiveDate) -> i64 {
 const WEEKDAYS2: [&str; 7] = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
 const WEEKDAYS3: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-fn draw_line(canvas: &mut Canvas, start: Point, end: Point) {
+fn draw_colored_line(canvas: &mut Canvas, start: Point, end: Point, color: Color) {
     let mut paint = Paint::default();
-    paint.set_color(Color::from_rgb(200, 200, 200)); // medium gray
+    paint.set_color(color); // medium gray
     paint.set_anti_alias(true); // Smooth edges
     paint.set_style(PaintStyle::Stroke); // Stroke (not fill)
     paint.set_stroke_width(2.0); // 2px wide
     canvas.draw_line(start, end, &paint);
+}
+
+fn draw_line(canvas: &mut Canvas, start: Point, end: Point) {
+    draw_colored_line(canvas, start, end, Color::from_rgb(200, 200, 200))
 }
 
 #[allow(dead_code)]
@@ -739,6 +779,19 @@ fn draw_weather_wrapped(
     }
 }
 
+fn get_today_hi_low(weather: &WeatherResponse) -> (i32, i32) {
+    let num_daily_pts = weather.hourly.time.len().min(24);
+
+    let mut max: f32 = -9999999.0;
+    let mut min: f32 = 9999999.0;
+    for i in 0..num_daily_pts {
+        max = max.max(weather.hourly.temperature[i]);
+        min = min.min(weather.hourly.temperature[i]);
+    }
+
+    (min.round() as i32, max.round() as i32)
+}
+
 fn draw_weather(
     canvas: &mut Canvas,
     font_boss: &FontBoss,
@@ -759,16 +812,56 @@ fn draw_weather(
     );
 
     let mini_font = FontBoss::load_font(20.0);
+    let med_font = FontBoss::load_font(35.0);
     let mega_font = FontBoss::load_font(100.0);
     let now_offset = 30;
 
+    let cur_temp_str = format!("{}°", weather.current.temperature.round());
+    let cur_temp_str_w = mega_font.measure_str(&cur_temp_str, None).0;
     draw_text_blob(
         canvas,
         &mega_font,
         x + 105,
         y + now_offset + 45,
-        &format!("{}°", weather.current.temperature.round()),
+        &cur_temp_str,
     );
+
+    let hilo = get_today_hi_low(&weather);
+
+    let hilo_start = x + cur_temp_str_w as i32 + 120;
+    let hi_temp_str = format!("{}°", hilo.1);
+    let hi_temp_str_w = med_font.measure_str(&hi_temp_str, None).0;
+    let lo_temp_str = format!("{}°", hilo.0);
+    let lo_temp_str_w = med_font.measure_str(&lo_temp_str, None).0;
+    let hilo_w = hi_temp_str_w.max(lo_temp_str_w);
+    let hilo_w_h = hi_temp_str_w.max(lo_temp_str_w) as i32 / 2;
+
+    draw_text_blob_with_color(
+        canvas,
+        &med_font,
+        hilo_start + hilo_w_h,
+        y + now_offset + 45,
+        &hi_temp_str,
+        Color::BLACK,
+        0.5,
+    );
+
+    draw_text_blob_with_color(
+        canvas,
+        &med_font,
+        hilo_start + hilo_w_h,
+        y + now_offset - 5 + 12,
+        &lo_temp_str,
+        Color::BLACK,
+        0.5,
+    );
+
+    {
+        let y = (y + now_offset - 5 + 20) as f32;
+        let start = Point::new(hilo_start as f32, y);
+        let end = Point::new(hilo_start as f32 + hilo_w, y);
+        draw_colored_line(canvas, start, end, Color::BLACK);
+    }
 
     draw_text_blob_with_color(
         canvas,
@@ -808,7 +901,7 @@ fn draw_weather(
 
     let mut opt_hourly_start_index: Option<usize> = None;
     for i in 0..weather.hourly.time.len() {
-        println!("dsfdsf  {}", weather.hourly.time[i]);
+        // println!("dsfdsf  {}", weather.hourly.time[i]);
 
         // Parse as a naive datetime (no timezone)
         let dt = NaiveDateTime::parse_from_str(&weather.hourly.time[i], "%Y-%m-%dT%H:%M")
@@ -851,8 +944,8 @@ fn draw_weather(
         precip_points.push(weather.hourly.precipitation_probability[i] as f32);
 
         let index = i - hourly_start_index;
-        let pct = index as f32 / (num_hours - 1) as f32;
-        println!(" >> {} -- {}", weather.hourly.time[i], pct);
+        // let pct = index as f32 / (num_hours - 1) as f32;
+        // println!(" >> {} -- {}", weather.hourly.time[i], pct);
 
         // Parse as a naive datetime (no timezone)
         let dt = NaiveDateTime::parse_from_str(&weather.hourly.time[i], "%Y-%m-%dT%H:%M")
@@ -862,7 +955,7 @@ fn draw_weather(
         let formatted = dt.format("%-I %p").to_string(); // %-I = hour without leading zero
         // let formatted = dt.format("%-I").to_string();
 
-        println!("{formatted}"); // "12 AM"
+        // println!("{formatted}"); // "12 AM"
 
         if (index + 3) % 4 == 0 {
             draw_text_blob_with_color(
@@ -878,7 +971,7 @@ fn draw_weather(
     }
 
     // temperature curve for today
-    let range = get_temp_range(&temp_points);
+    let today_temp_range = get_temp_range(&temp_points);
     draw_text_blob(
         canvas,
         &font_boss.emoji_font,
@@ -895,7 +988,7 @@ fn draw_weather(
         hourly_height,
         &temp_points,
         "°",
-        range,
+        today_temp_range,
     );
 
     draw_text_blob(
@@ -974,7 +1067,14 @@ fn draw_weather(
                 0.5,
             );
 
-            draw_temp_gradient(canvas, x - 7, y + this_grad_off + 10, 14, this_daily_height);
+            let grad_half_width = 10;
+            draw_temp_gradient(
+                canvas,
+                x - grad_half_width,
+                y + this_grad_off + 10,
+                grad_half_width * 2,
+                this_daily_height,
+            );
 
             draw_text_blob_with_color(
                 canvas,
@@ -1085,6 +1185,19 @@ pub fn svg_from_file(
     })
 }
 
+fn process_verse_token(token: &str) -> (String, bool) {
+    // Check if token matches "[number]" using a simple pattern
+    if let Some(stripped) = token.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+        // Make sure the inside is numeric
+        if stripped.chars().all(|c| c.is_ascii_digit()) {
+            return (stripped.to_string(), true);
+        }
+    }
+
+    // Default: passthrough
+    (token.to_string(), false)
+}
+
 fn measure_and_draw(
     canvas: &mut Canvas,
     x: i32,
@@ -1097,6 +1210,7 @@ fn measure_and_draw(
     draw: bool,
     ypad: i32,
 ) -> f32 {
+    let ref_font = FontBoss::load_font(fsize * 0.8);
     let font = FontBoss::load_font(fsize);
     let spacew = font.measure_str(" ", None).0;
     let padding = 25;
@@ -1131,7 +1245,13 @@ fn measure_and_draw(
     }
 
     for token in tokens {
-        let ww = font.measure_str(token, None).0;
+        let (val, is_number) = process_verse_token(token);
+        let token = &val;
+
+        let use_font = if is_number { &ref_font } else { &font };
+        let push_up = if is_number { lh * 0.25 } else { 0.0 } as i32;
+
+        let ww = use_font.measure_str(token, None).0;
         // println!("{} - {}", token, ww);
 
         if xp + ww > target_width {
@@ -1142,9 +1262,9 @@ fn measure_and_draw(
         if draw {
             draw_text_blob(
                 canvas,
-                &font,
+                &use_font,
                 xp as i32 + x + padding,
-                yp as i32 + y + padding + ypad,
+                yp as i32 + y + padding + ypad - push_up,
                 token,
             );
         }
@@ -1179,6 +1299,38 @@ fn measure_and_draw(
 }
 
 fn draw_verse(canvas: &mut Canvas, x: i32, y: i32, width: i32, height: i32) {
+    let now = Local::now();
+    // let date_str = now.format("%A, %B %d, %Y %p").to_string();
+    let date_str = now.format("%H:%M:%s").to_string();
+
+    // Hash the string
+    let mut hasher = DefaultHasher::new();
+    date_str.hash(&mut hasher);
+    let hash64 = hasher.finish() as u64;
+
+    println!("date_str = {date_str}");
+
+    // Example: deterministic selection
+    let db_path = "verses.db";
+
+    match get_verse_by_seed(db_path, hash64).unwrap() {
+        Some((reference, text)) => {
+            println!("{} → {}", reference, text);
+            really_draw_verse(canvas, x, y, width, height, &reference, &text);
+        }
+        None => println!("No verses found in DB."),
+    };
+}
+
+fn really_draw_verse(
+    canvas: &mut Canvas,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    attr: &str,
+    verse: &str,
+) {
     let margin = 15;
 
     draw_box_with_gradient(
@@ -1191,9 +1343,6 @@ fn draw_verse(canvas: &mut Canvas, x: i32, y: i32, width: i32, height: i32) {
         Color::from_rgb(240, 240, 240),
     );
 
-    let attr = "1 Timothy 6:9";
-    let verse = "See what great love the Father has lavished on us, that we should be called children of God! And that is what we are! The reason the world does not know us is that it did not know him.";
-    // let verse = "Be strong and take heart, all you who hope in the LORD.";
     let tokens: Vec<&str> = verse.split_whitespace().collect();
 
     for i in (10..=50).rev() {
@@ -1332,9 +1481,13 @@ fn draw_date(canvas: &mut Canvas, _font_boss: &FontBoss, x: i32, y: i32, width: 
     let font = FontBoss::load_font(35.0);
     let bold_font = FontBoss::load_bold_font(35.0);
 
-    let wday_text = "Saturday";
-    let date_text = "November 29";
-    let year_text = "2025";
+    // Get the current local datetime
+    let now = Local::now();
+
+    // Extract the parts
+    let wday_text = now.format("%A").to_string();
+    let date_text = now.format("%B %d").to_string();
+    let year_text = now.format("%Y").to_string();
 
     let wday = font.measure_str(&wday_text, None).0;
     let date = bold_font.measure_str(&date_text, None).0;
