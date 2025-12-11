@@ -1299,8 +1299,8 @@ fn measure_and_draw(
 
 fn draw_verse(canvas: &mut Canvas, x: i32, y: i32, width: i32, height: i32) {
     let now = Local::now();
-    // let date_str = now.format("%A, %B %d, %Y %p").to_string();
-    let date_str = now.format("%H:%M:%s").to_string();
+    let date_str = now.format("%B %d %Y %p").to_string();
+    // let date_str = now.format("%H:%M:%s").to_string();
 
     // Hash the string
     let mut hasher = DefaultHasher::new();
@@ -1757,7 +1757,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let compressed = compress_to_vec_zlib(&red_channel, 8);
-    let mut file = File::create("red_channel.mz")?;
+    let mut file = File::create("image.mz")?;
     file.write_all(&compressed)?;
 
     let data = image
