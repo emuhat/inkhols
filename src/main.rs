@@ -10,6 +10,7 @@ use chrono::Local;
 use chrono::NaiveDate;
 use chrono::NaiveDateTime;
 use chrono::Utc;
+use miniz_oxide::deflate::compress_to_vec_zlib;
 use resvg::Tree as ResvgTree; // Also use resvg's re-exported usvg
 use resvg::tiny_skia;
 use resvg::usvg;
@@ -40,7 +41,6 @@ use std::io;
 use std::io::BufWriter;
 use std::io::Write;
 use std::path::Path as FsPath;
-use miniz_oxide::deflate::compress_to_vec_zlib;
 // use skia_safe::codec::Options;
 // use skia_safe::runtime_effect::Options;
 
@@ -126,6 +126,7 @@ pub struct AllData {
     weather_age_hours: f64,
     significant_dates: Vec<SignificantDate>,
     people: Vec<Person>,
+    people_age_hours: f64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1413,7 +1414,6 @@ fn draw_people(
     x: i32,
     y: i32,
     width: i32,
-    _height: i32,
     data: &AllData,
 ) {
     let mini_font = FontBoss::load_font(20.0);
@@ -1474,6 +1474,30 @@ fn draw_people(
 
     //     draw_text_blob(canvas, &font_boss.emoji_font, x + width - 210, yoff, "❓🤩😀😐❌➖");
     // }
+}
+
+fn maybe_draw_people(
+    canvas: &mut Canvas,
+    font_boss: &FontBoss,
+    x: i32,
+    y: i32,
+    width: i32,
+    _height: i32,
+    data: &AllData,
+) {
+    if true {
+        draw_people(canvas, font_boss, x, y, width, data);
+    } else {
+        draw_text_blob(canvas, &font_boss.emoji_font, x, y + 20, "😞");
+
+        draw_text_blob(
+            canvas,
+            &font_boss.main_font,
+            x + 50,
+            y + 20,
+            "Problem getting allowances",
+        );
+    }
 }
 
 fn draw_date(canvas: &mut Canvas, _font_boss: &FontBoss, x: i32, y: i32, width: i32, _height: i32) {
@@ -1598,7 +1622,7 @@ fn handle_child(
             draw_line(canvas, start, end);
         }
         LayoutNode::Allowance(_) => {
-            draw_people(canvas, font_boss, x, y, width, height, data);
+            maybe_draw_people(canvas, font_boss, x, y, width, height, data);
         }
         LayoutNode::Countdown(_) => {
             let sig_dates = &data.significant_dates;
@@ -1669,13 +1693,13 @@ pub fn read_envelope<T: DeserializeOwned>(path: &str) -> io::Result<(T, f64)> {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (weather, weather_age_hours) = read_envelope::<WeatherResponse>("weather.json")?;
-    println!("Data is {:.1} hours old", weather_age_hours);
+    println!("Weather data is {:.1} hours old", weather_age_hours);
+
+    let (people, people_age_hours) = read_envelope::<Vec<Person>>("people.json")?;
+    println!("People data is {:.1} hours old", weather_age_hours);
 
     let data = fs::read_to_string("dates.json")?;
     let significant_dates: Vec<SignificantDate> = serde_json::from_str(&data)?;
-
-    let data = fs::read_to_string("people.json")?;
-    let people: Vec<Person> = serde_json::from_str(&data)?;
 
     for holiday in &significant_dates {
         println!("{} {} on {}", holiday.emoji, holiday.name, holiday.date);
@@ -1686,6 +1710,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         weather_age_hours: weather_age_hours,
         significant_dates: significant_dates,
         people: people,
+        people_age_hours: people_age_hours,
     };
 
     // println!("{:#?}", weather.current.temperature);
