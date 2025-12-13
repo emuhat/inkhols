@@ -10,7 +10,7 @@ use chrono::Local;
 use chrono::NaiveDate;
 use chrono::NaiveDateTime;
 use chrono::Utc;
-use miniz_oxide::deflate::compress_to_vec_zlib;
+use miniz_oxide::deflate::compress_to_vec;
 use resvg::Tree as ResvgTree; // Also use resvg's re-exported usvg
 use resvg::tiny_skia;
 use resvg::usvg;
@@ -1689,6 +1689,164 @@ pub fn read_envelope<T: DeserializeOwned>(path: &str) -> io::Result<(T, f64)> {
     Ok((payload, hours_old))
 }
 
+fn dither_and_pack_3bpp(image_data: &[u8], width: usize, height: usize) -> Vec<u8> {
+    // Step 1: Dither to 8 levels (0-7) using Floyd-Steinberg
+    let dithered = floyd_steinberg_to_levels(image_data, width, height, 8);
+    
+    // Step 2: Pack to 3bpp format
+    pack_3bpp_high_first(&dithered, width, height)
+}
+
+fn floyd_steinberg_to_levels(
+    gray: &[u8],
+    width: usize,
+    height: usize,
+    levels: usize,
+) -> Vec<u8> {
+    assert!(levels >= 2, "levels must be >= 2");
+    
+    let mut work = vec![0.0f32; gray.len()];
+    for (i, &val) in gray.iter().enumerate() {
+        work[i] = val as f32;
+    }
+    
+    let mut out = vec![0u8; gray.len()];
+    let step = 255.0 / (levels - 1) as f32;
+    
+    // Floyd-Steinberg kernel: right, bottom-left, bottom, bottom-right
+    // with weights 7/16, 3/16, 5/16, 1/16
+    let kernel = [(1, 0, 7), (-1, 1, 3), (0, 1, 5), (1, 1, 1)];
+    let norm = 16.0;
+    
+    for y in 0..height {
+        // Serpentine scan (zigzag left-right)
+        let (x_start, x_end, x_step) = if y % 2 == 1 {
+            (width - 1, usize::MAX, -1isize)
+        } else {
+            (0, width, 1isize)
+        };
+        
+        let mut x = x_start;
+        while x != x_end {
+            let i = y * width + x;
+            let val = work[i];
+            
+            // Quantize to nearest level
+            let k = (val / step).round() as i32;
+            let k = k.clamp(0, (levels - 1) as i32) as u8;
+            out[i] = k;
+            
+            // Calculate quantization error
+            let qv = k as f32 * step;
+            let err = val - qv;
+            
+            // Diffuse error to neighbors
+            for &(dx, dy, w) in &kernel {
+                let dx_adj = if y % 2 == 1 { -dx } else { dx };
+                let nx = x as isize + dx_adj;
+                let ny = y as isize + dy;
+                
+                if nx >= 0 && nx < width as isize && ny >= 0 && ny < height as isize {
+                    let j = (ny as usize) * width + (nx as usize);
+                    work[j] = (work[j] + (err * w as f32) / norm).clamp(0.0, 255.0);
+                }
+            }
+            
+            x = if x_step < 0 {
+                x.wrapping_sub(1)
+            } else {
+                x + 1
+            };
+        }
+    }
+    
+    out
+}
+
+fn pack_3bpp_high_first(idx: &[u8], width: usize, height: usize) -> Vec<u8> {
+    let bytes_per_row = (width + 1) / 2;
+    let mut out = vec![0u8; bytes_per_row * height];
+    let mut oi = 0;
+    
+    for y in 0..height {
+        let mut nibs = 0;
+        let mut byte = 0u8;
+        
+        for x in 0..width {
+            let v3 = idx[y * width + x] & 0x07;
+            let nibble = (v3 << 1) & 0x0F;
+            byte = (byte << 4) | nibble;
+            nibs += 1;
+            
+            if nibs == 2 {
+                out[oi] = byte;
+                oi += 1;
+                nibs = 0;
+                byte = 0;
+            }
+        }
+        
+        if nibs == 1 {
+            out[oi] = byte << 4;
+            oi += 1;
+        }
+    }
+    
+    out
+}
+
+fn write_c_header(
+    packed_data: &[u8],
+    width: usize,
+    height: usize,
+    array_name: &str,
+    filename: &str,
+) -> std::io::Result<()> {
+    let mut file = BufWriter::new(File::create(filename)?);
+    
+    // Write header comment
+    writeln!(file, "// 3-bit grayscale image (2 pixels per byte)")?;
+    writeln!(file, "// size: {}x{}px, total bytes: {}", width, height, packed_data.len())?;
+    writeln!(file)?;
+    
+    // Write array declaration
+    writeln!(file, "const uint8_t {}[] PROGMEM = {{", array_name)?;
+    
+    // Write data in rows of 16 bytes
+    for (i, chunk) in packed_data.chunks(16).enumerate() {
+        write!(file, "  ")?;
+        
+        for (j, &byte) in chunk.iter().enumerate() {
+            write!(file, "0x{:02X}", byte)?;
+            
+            // Add comma if not the last byte overall
+            if i * 16 + j < packed_data.len() - 1 {
+                write!(file, ", ")?;
+            }
+        }
+        
+        writeln!(file)?;
+    }
+    
+    writeln!(file, "}};")?;
+    
+    // Write width and height constants
+    writeln!(file, "const uint16_t {}_w = {};", array_name, width)?;
+    writeln!(file, "const uint16_t {}_h = {};", array_name, height)?;
+    
+    Ok(())
+}
+
+fn apply_gamma(gray: &[u8], gamma: f32) -> Vec<u8> {
+    gray.iter()
+        .map(|&val| {
+            let normalized = val as f32 / 255.0;
+            let corrected = normalized.powf(gamma);
+            (corrected * 255.0).round() as u8
+        })
+        .collect()
+}
+
 /// ---- Main: read layout.json -> render -> save PNG ----
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -1781,7 +1939,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("Failed to read pixels".into());
     }
 
-    let compressed = compress_to_vec_zlib(&red_channel, 8);
+    let darkened = apply_gamma(&red_channel, 1.5);  // Try 1.3 to 1.8
+
+    let packed = dither_and_pack_3bpp(&darkened, width, height);
+
+    // Verify size
+    println!("Packed size: {} bytes (expected 495000)", packed.len());
+    assert_eq!(packed.len(), 495_000, "Size mismatch!");
+    
+    // Write to file
+    write_c_header(&packed, width, height, "output", "image.h")?;
+
+    let compressed = compress_to_vec(&packed, 8);
     let mut file = File::create("image.mz")?;
     file.write_all(&compressed)?;
 
