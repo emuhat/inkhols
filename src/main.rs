@@ -41,10 +41,21 @@ use std::io;
 use std::io::BufWriter;
 use std::io::Write;
 use std::path::Path as FsPath;
-// use skia_safe::codec::Options;
-// use skia_safe::runtime_effect::Options;
 
 /// ---- Data model (from JSON) ----
+
+#[derive(Debug, Deserialize)]
+struct Entry {
+    person_id: u32,
+    score: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DailyScore {
+    date: String,
+    multiplier: i32,
+    entries: Vec<Entry>,
+}
 
 #[derive(Debug, Deserialize)]
 pub struct LastGood {
@@ -1852,6 +1863,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (people, people_age_hours) = read_envelope::<Vec<Person>>("people.json")?;
     println!("People data is {:.1} hours old", weather_age_hours);
+
+
+    let (cleaning, _) = read_envelope::<Vec<DailyScore>>("cleaning.json")?;
+    // println!("People data is {:.1} hours old", weather_age_hours);
+
+
+
+    // Parse JSON string into Vec<DailyScore>
+    // let daily_scores: Vec<DailyScore> = serde_json::from_str(data)?;
+
+    // Print to verify
+    for daily in cleaning {
+        println!("Date: {}", daily.date);
+        println!("Multiplier: {}", daily.multiplier);
+        for entry in daily.entries {
+            println!("  Person {}: {}", entry.person_id, entry.score);
+        }
+    }
+
 
     let data = fs::read_to_string("dates.json")?;
     let significant_dates: Vec<SignificantDate> = serde_json::from_str(&data)?;
