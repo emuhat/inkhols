@@ -8,6 +8,8 @@ use chrono::DateTime;
 use chrono::Local;
 use chrono::NaiveDateTime;
 use chrono::Utc;
+use chrono::{Datelike, NaiveDate};
+use clap::Parser;
 use miniz_oxide::deflate::compress_to_vec;
 use resvg::Tree as ResvgTree; // Also use resvg's re-exported usvg
 use resvg::tiny_skia;
@@ -30,7 +32,7 @@ use skia_safe::image::CachingHint;
 use skia_safe::{
     Canvas, Color, Font, Paint, PaintStyle, Point, RRect, Rect, Surface, TextBlob, TileMode,
 };
-use std::env;
+use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
 use std::hash::DefaultHasher;
@@ -41,6 +43,18 @@ use std::io::BufWriter;
 use std::io::Write;
 use std::path::Path as FsPath;
 use std::path::PathBuf;
+
+#[derive(Debug, Parser)]
+#[command(author, version, about)]
+struct Args {
+    /// Directory for output files (PNG, MZ)
+    #[arg(long, value_name = "DIR", default_value = ".")]
+    out_dir: PathBuf,
+
+    /// Directory containing input JSON data
+    #[arg(long, value_name = "DIR", default_value = ".")]
+    data_dir: PathBuf,
+}
 
 /// ---- Data model (from JSON) ----
 
@@ -2003,25 +2017,41 @@ fn apply_gamma(gray: &[u8], gamma: f32) -> Vec<u8> {
         .collect()
 }
 
-use chrono::{Datelike, NaiveDate};
-use std::collections::HashMap;
+/// Convert any path-like type to a fully qualified absolute path as a String
+fn absolute_path_string<P: AsRef<std::path::Path>>(path: P) -> io::Result<String> {
+    let abs_path = std::fs::canonicalize(path.as_ref())?;
+    abs_path.into_os_string().into_string().map_err(|os_str| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Failed to convert path to string: {:?}", os_str),
+        )
+    })
+}
 
 /// ---- Main: read layout.json -> render -> save PNG ----
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let (weather, weather_age_hours) = read_envelope::<WeatherResponse>("weather.json")?;
+    let args = Args::parse();
+
+    let cleaning_path = absolute_path_string(args.data_dir.join("cleaning.json"))?;
+    let allowance_path = absolute_path_string(args.data_dir.join("allowance.json"))?;
+    let names_path = absolute_path_string(args.data_dir.join("names.json"))?;
+    let weather_path = absolute_path_string(args.data_dir.join("weather.json"))?;
+    let dates_path = absolute_path_string(args.data_dir.join("dates.json"))?;
+
+    let (weather, weather_age_hours) = read_envelope::<WeatherResponse>(&weather_path)?;
     println!("Weather data is {:.1} hours old", weather_age_hours);
 
-    let (cleaning, cleaning_age_hours) = read_envelope::<Vec<DailyScore>>("cleaning.json")?;
+    let (cleaning, cleaning_age_hours) = read_envelope::<Vec<DailyScore>>(&cleaning_path)?;
     println!("People data is {:.1} hours old", cleaning_age_hours);
 
-    let (balances, balances_age_hours) = read_envelope::<Vec<PersonBalance>>("allowance.json")?;
+    let (balances, balances_age_hours) = read_envelope::<Vec<PersonBalance>>(&allowance_path)?;
     println!("Balances data is {:.1} hours old", balances_age_hours);
 
-    let (names, names_age_hours) = read_envelope::<Vec<PersonName>>("names.json")?;
+    let (names, names_age_hours) = read_envelope::<Vec<PersonName>>(&names_path)?;
     println!("Names data is {:.1} hours old", names_age_hours);
 
-    let data = fs::read_to_string("dates.json")?;
+    let data = fs::read_to_string(&dates_path)?;
     let significant_dates: Vec<SignificantDate> = serde_json::from_str(&data)?;
 
     for holiday in &significant_dates {
@@ -2119,20 +2149,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ------------------------------------------------------------
     // 1. Output directory (optional arg, default = cwd)
     // ------------------------------------------------------------
-    let out_dir: PathBuf = env::args()
-        .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or(env::current_dir()?);
+    // Ensure output directory exists
+    fs::create_dir_all(&args.out_dir)?;
 
-    fs::create_dir_all(&out_dir)?;
-
-    let mz_path = out_dir.join("image.mz");
-    let png_path = out_dir.join("output.png");
+    let mz_path = args.out_dir.join("image.mz");
+    let png_path = args.out_dir.join("output.png");
 
     // Unique-ish temp suffix
     let pid = std::process::id();
-    let mz_tmp = out_dir.join(format!(".image.mz.tmp.{pid}"));
-    let png_tmp = out_dir.join(format!(".output.png.tmp.{pid}"));
+    let mz_tmp = args.out_dir.join(format!(".image.mz.tmp.{pid}"));
+    let png_tmp = args.out_dir.join(format!(".output.png.tmp.{pid}"));
 
     println!("mz_tmp {}", mz_tmp.display());
     println!("png_tmp {}", png_tmp.display());
