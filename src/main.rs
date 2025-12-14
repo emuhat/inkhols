@@ -5,9 +5,7 @@
 // src/main.rs
 // Use resvg's re-exported tiny-skia to avoid version conflicts
 use chrono::DateTime;
-use chrono::Datelike; // For .weekday()
 use chrono::Local;
-use chrono::NaiveDate;
 use chrono::NaiveDateTime;
 use chrono::Utc;
 use miniz_oxide::deflate::compress_to_vec;
@@ -44,7 +42,7 @@ use std::path::Path as FsPath;
 
 /// ---- Data model (from JSON) ----
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct PersonName {
     person_id: u32,
     name: String,
@@ -150,8 +148,15 @@ pub struct AllData {
     weather: WeatherResponse,
     weather_age_hours: f64,
     significant_dates: Vec<SignificantDate>,
-    people: Vec<Person>,
-    people_age_hours: f64,
+
+    cleaning: Vec<DailyScore>,
+    cleaning_age_hours: f64,
+
+    balances: Vec<PersonBalance>,
+    balances_age_hours: f64,
+
+    names: Vec<PersonName>,
+    names_age_hours: f64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -331,7 +336,6 @@ fn days_between(date: NaiveDate) -> i64 {
     (date - today).num_days()
 }
 
-const WEEKDAYS2: [&str; 7] = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
 const WEEKDAYS3: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 fn draw_colored_line(canvas: &mut Canvas, start: Point, end: Point, color: Color) {
@@ -1253,7 +1257,11 @@ fn measure_and_draw(
 
         let use_font = if is_number { &ref_font } else { &font };
         let push_up = if is_number { lh * 0.25 } else { 0.0 } as i32;
-        let color = if is_number { Color::from_rgb(100, 100, 100) } else { Color::BLACK };
+        let color = if is_number {
+            Color::from_rgb(100, 100, 100)
+        } else {
+            Color::BLACK
+        };
 
         let ww = use_font.measure_str(token, None).0;
         // println!("{} - {}", token, ww);
@@ -1271,7 +1279,7 @@ fn measure_and_draw(
                 yp as i32 + y + padding + ypad - push_up,
                 token,
                 color,
-                0.0
+                0.0,
             );
         }
 
@@ -1393,6 +1401,9 @@ fn really_draw_verse(
 }
 
 fn format_cents_commas(cents: i64) -> String {
+    let negative = if cents < 0 { true } else { false };
+    let cents = cents.abs();
+
     let dollars = cents / 100;
     let remainder = cents % 100;
 
@@ -1411,7 +1422,21 @@ fn format_cents_commas(cents: i64) -> String {
     }
 
     let dollar_str: String = out.chars().rev().collect();
-    format!("${}.{:02}", dollar_str, remainder)
+    format!(
+        "{}${}.{:02}",
+        if negative { "−" } else { "" },
+        dollar_str,
+        remainder
+    )
+}
+
+fn today_multiplier(cleaning: &[DailyScore]) -> Option<i32> {
+    let today: NaiveDate = Local::now().date_naive();
+
+    cleaning
+        .iter()
+        .find(|d| NaiveDate::parse_from_str(&d.date, "%Y-%m-%d").ok() == Some(today))
+        .map(|d| d.multiplier)
 }
 
 fn draw_people(
@@ -1426,8 +1451,60 @@ fn draw_people(
     let mini_font = FontBoss::load_font(20.0);
     let bold_font = FontBoss::load_bold_font(25.0);
 
-    // header -- allowances or today's lucky multiplier
-    if !false {
+    let cleaning = &data.cleaning;
+    let balances = &data.balances;
+    let names = &data.names;
+
+    ///////////////////////////////////////////////////////////////////////
+    ///////////////////////////////////////////////////////////////////////
+
+    // ---- Build lookup tables ----
+    let balance_by_id: HashMap<u32, &PersonBalance> =
+        balances.iter().map(|b| (b.person_id, b)).collect();
+
+    let name_by_id: HashMap<u32, &str> = names
+        .iter()
+        .map(|n| (n.person_id, n.name.as_str()))
+        .collect();
+
+    // ---- Dates header ----
+    print!("Dates: ");
+    for day in cleaning {
+        let date = NaiveDate::parse_from_str(&day.date, "%Y-%m-%d").expect("invalid date");
+
+        let wd = match date.weekday() {
+            chrono::Weekday::Mon => "Mo",
+            chrono::Weekday::Tue => "Tu",
+            chrono::Weekday::Wed => "We",
+            chrono::Weekday::Thu => "Th",
+            chrono::Weekday::Fri => "Fr",
+            chrono::Weekday::Sat => "Sa",
+            chrono::Weekday::Sun => "Su",
+        };
+
+        print!("{}({}) ", wd, day.multiplier);
+    }
+    println!("\n");
+
+    // ---- Collect scores per person, in date order ----
+    let mut scores_by_person: HashMap<u32, Vec<&str>> = HashMap::new();
+
+    for day in cleaning {
+        for entry in &day.entries {
+            scores_by_person
+                .entry(entry.person_id)
+                .or_default()
+                .push(entry.score.as_str());
+        }
+    }
+
+    ///////////////////////////////////////////////////////////////////////
+    ///////////////////////////////////////////////////////////////////////
+
+    // See if we have a lucky multiplier today
+    if let Some(mult) = today_multiplier(&cleaning)
+        && mult > 1
+    {
         draw_filled_circle(
             canvas,
             Point::new((x + 21) as f32, (y + 8) as f32),
@@ -1441,13 +1518,11 @@ fn draw_people(
             &big_bold_font,
             x + 21,
             y + 18,
-            "3",
+            &mult.to_string(),
             Color::WHITE,
             0.5,
         );
-    }
-
-    else {
+    } else {
         draw_text_blob_with_color(
             canvas,
             &bold_font,
@@ -1459,17 +1534,43 @@ fn draw_people(
         );
     }
 
+    let num_dates = cleaning.len().min(5);
+    let mut any_mults = false;
+
+    for j in 0..num_dates {
+        if cleaning[j].multiplier > 1 {
+            any_mults = true;
+            break;
+        }
+    }
+
     // weekyday headers
-    let any_mults = false;
-    for j in 0..5 {
-        let mut opt_mult: Option<i32> = None; //if j == 2 { Some(2) } else { None }; //Some(2);
+    for j in 0..num_dates {
+        let day = &cleaning[j];
+        let date = NaiveDate::parse_from_str(&day.date, "%Y-%m-%d").expect("invalid date");
+
+        let wd = match date.weekday() {
+            chrono::Weekday::Mon => "Mo",
+            chrono::Weekday::Tue => "Tu",
+            chrono::Weekday::Wed => "We",
+            chrono::Weekday::Thu => "Th",
+            chrono::Weekday::Fri => "Fr",
+            chrono::Weekday::Sat => "Sa",
+            chrono::Weekday::Sun => "Su",
+        };
+
+        let mut opt_mult: Option<i32> = if day.multiplier > 1 {
+            Some(day.multiplier)
+        } else {
+            None
+        }; //Some(2);
 
         draw_text_blob_with_color(
             canvas,
             &mini_font,
             x + width - 205 + 19 + j as i32 * 40,
-            y + 18 - if any_mults {0} else {6},
-            WEEKDAYS2[j],
+            y + 18 - if any_mults { 0 } else { 6 },
+            wd,
             Color::BLACK,
             0.5,
         );
@@ -1497,62 +1598,78 @@ fn draw_people(
         }
     }
 
-    // people data
-    for i in 0..data.people.len() {
+    let mut ordered_names = names.to_vec();
+    ordered_names.sort_by_key(|n| n.person_id);
+
+    // ---- Print rows ----
+    let mut i = 0;
+    for person in ordered_names {
+        let scores = scores_by_person.get(&person.person_id);
+        let bal = balance_by_id.get(&person.person_id);
+
+        let name = name_by_id.get(&person.person_id).unwrap_or(&"Unknown");
+        let bal = balance_by_id.get(&person.person_id);
         let yoff = y + i as i32 * 60 + 60;
-        let person = &data.people[i];
 
-        draw_text_blob(canvas, &font_boss.main_font, x, yoff, &person.name);
+        if let Some(b) = bal {
+            print!("{} -- {}, +{}, {}   ", name, b.balance, b.up, b.down);
+        } else {
+            print!("{} -- (no balance)   ", name);
+        }
 
-        draw_text_blob_with_color(
-            canvas,
-            &mini_font,
-            x + width - 240,
-            yoff + 25,
-            "Sunday:   +$2.05  −$1.42",
-            Color::BLACK,
-            1.0,
-        );
+        // name
+        draw_text_blob(canvas, &font_boss.main_font, x, yoff, &name);
 
-        for j in 0..person.cleaning.len() {
-            draw_text_blob(
+        if let Some(b) = bal {
+            // balance
+            draw_text_blob_with_color(
                 canvas,
-                &font_boss.emoji_font,
-                x + width - 205 + j as i32 * 40,
-                yoff + 10,
-                &person.cleaning[j],
+                &font_boss.main_font,
+                x + width - 240,
+                yoff,
+                &format_cents_commas(b.balance),
+                Color::BLACK,
+                1.0,
+            );
+
+            // weekly up/down
+
+            let down_balance = if b.down < 0 {
+                format!("  {}", &format_cents_commas(b.down))
+            } else {
+                "".to_string()
+            };
+
+            draw_text_blob_with_color(
+                canvas,
+                &mini_font,
+                x + width - 240,
+                yoff + 25,
+                &format!("Week:   +{}{}", &format_cents_commas(b.up), &down_balance),
+                Color::BLACK,
+                1.0,
             );
         }
 
-        draw_text_blob_with_color(
-            canvas,
-            &font_boss.main_font,
-            x + width - 240,
-            yoff,
-            &format_cents_commas(person.balance),
-            Color::BLACK,
-            1.0,
-        );
+        // cleaning emojis
+        if let Some(scores) = scores {
+            for k in 0..num_dates.min(num_dates) {
+                let s = &scores[k];
+                print!("{} ", s);
+
+                draw_text_blob(
+                    canvas,
+                    &font_boss.emoji_font,
+                    x + width - 205 + k as i32 * 40,
+                    yoff + 10,
+                    &s,
+                );
+            }
+        }
+
+        println!();
+        i += 1;
     }
-    // let items = vec![("Edward", 132345), ("Theo", 1354), ("Peter", 1339)];
-
-    // for i in 0..items.len() {
-    //     let yoff = y + i as i32 * 50;
-
-    //     // draw_rect_thing(canvas, x, y, width, height);
-    //     draw_text_blob(canvas, &font_boss.main_font, x, yoff, items[i].0);
-    //     draw_text_blob_with_color(
-    //         canvas,
-    //         &font_boss.main_font,
-    //         x + width - 240,
-    //         yoff,
-    //         &format_cents_commas(items[i].1),
-    //         Color::BLACK,
-    //         1.0,
-    //     );
-
-    //     draw_text_blob(canvas, &font_boss.emoji_font, x + width - 210, yoff, "❓🤩😀😐❌➖");
-    // }
 }
 
 fn maybe_draw_people(
@@ -1875,46 +1992,23 @@ fn apply_gamma(gray: &[u8], gamma: f32) -> Vec<u8> {
         .collect()
 }
 
+use chrono::{Datelike, NaiveDate};
+use std::collections::HashMap;
+
 /// ---- Main: read layout.json -> render -> save PNG ----
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (weather, weather_age_hours) = read_envelope::<WeatherResponse>("weather.json")?;
     println!("Weather data is {:.1} hours old", weather_age_hours);
 
-    let (people, people_age_hours) = read_envelope::<Vec<Person>>("people.json")?;
-    println!("People data is {:.1} hours old", weather_age_hours);
+    let (cleaning, cleaning_age_hours) = read_envelope::<Vec<DailyScore>>("cleaning.json")?;
+    println!("People data is {:.1} hours old", cleaning_age_hours);
 
-    let (cleaning, _) = read_envelope::<Vec<DailyScore>>("cleaning.json")?;
-    // println!("People data is {:.1} hours old", weather_age_hours);
+    let (balances, balances_age_hours) = read_envelope::<Vec<PersonBalance>>("allowance.json")?;
+    println!("Balances data is {:.1} hours old", balances_age_hours);
 
-    // Print to verify
-    for daily in cleaning {
-        println!("Date: {}", daily.date);
-        println!("Multiplier: {}", daily.multiplier);
-        for entry in daily.entries {
-            println!("  Person {}: {}", entry.person_id, entry.score);
-        }
-    }
-
-
-    let (allowance, _) = read_envelope::<Vec<PersonBalance>>("allowance.json")?;
-
-    for b in allowance {
-        println!(
-            "Person {}: balance={}, up={}, down={}",
-            b.person_id, b.balance, b.up, b.down
-        );
-    }
-
-
-    let (names, _) = read_envelope::<Vec<PersonName>>("names.json")?;
-    
-    for p in names {
-        println!("Person {} is {}", p.person_id, p.name);
-    }
-
-
-
+    let (names, names_age_hours) = read_envelope::<Vec<PersonName>>("names.json")?;
+    println!("Names data is {:.1} hours old", names_age_hours);
 
     let data = fs::read_to_string("dates.json")?;
     let significant_dates: Vec<SignificantDate> = serde_json::from_str(&data)?;
@@ -1927,8 +2021,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         weather: weather,
         weather_age_hours: weather_age_hours,
         significant_dates: significant_dates,
-        people: people,
-        people_age_hours: people_age_hours,
+        cleaning: cleaning,
+        cleaning_age_hours: cleaning_age_hours,
+        balances: balances,
+        balances_age_hours: balances_age_hours,
+        names: names,
+        names_age_hours: names_age_hours,
     };
 
     // println!("{:#?}", weather.current.temperature);
