@@ -30,6 +30,7 @@ use skia_safe::image::CachingHint;
 use skia_safe::{
     Canvas, Color, Font, Paint, PaintStyle, Point, RRect, Rect, Surface, TextBlob, TileMode,
 };
+use std::env;
 use std::fs;
 use std::fs::File;
 use std::hash::DefaultHasher;
@@ -39,6 +40,7 @@ use std::io;
 use std::io::BufWriter;
 use std::io::Write;
 use std::path::Path as FsPath;
+use std::path::PathBuf;
 
 /// ---- Data model (from JSON) ----
 
@@ -2114,18 +2116,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Packed size: {} bytes (expected 495000)", packed.len());
     assert_eq!(packed.len(), 495_000, "Size mismatch!");
 
+    // ------------------------------------------------------------
+    // 1. Output directory (optional arg, default = cwd)
+    // ------------------------------------------------------------
+    let out_dir: PathBuf = env::args()
+        .nth(1)
+        .map(PathBuf::from)
+        .unwrap_or(env::current_dir()?);
+
+    fs::create_dir_all(&out_dir)?;
+
+    let mz_path = out_dir.join("image.mz");
+    let png_path = out_dir.join("output.png");
+
+    // Unique-ish temp suffix
+    let pid = std::process::id();
+    let mz_tmp = out_dir.join(format!(".image.mz.tmp.{pid}"));
+    let png_tmp = out_dir.join(format!(".output.png.tmp.{pid}"));
+
+    println!("mz_tmp {}", mz_tmp.display());
+    println!("png_tmp {}", png_tmp.display());
+
     let compressed = compress_to_vec(&packed, 8);
-    let mut file = File::create("image.mz")?;
-    file.write_all(&compressed)?;
+
+    {
+        let mut file = File::create(&mz_tmp)?;
+        file.write_all(&compressed)?;
+        file.sync_all()?; // ensure bytes hit disk
+    }
 
     let data = image
         .encode_to_data(skia_safe::EncodedImageFormat::PNG)
         .ok_or("Failed to encode image")?;
-    let file = File::create("output.png")?;
-    let mut writer = BufWriter::new(file);
-    writer.write(data.as_bytes())?;
 
-    println!("Saved output.png");
+    {
+        let file = File::create(&png_tmp)?;
+        let mut writer = BufWriter::new(file);
+        writer.write_all(data.as_bytes())?;
+        writer.flush()?;
+        writer.get_ref().sync_all()?;
+    }
+
+    // ------------------------------------------------------------
+    // 4. Atomic swap
+    // ------------------------------------------------------------
+    fs::rename(&mz_tmp, &mz_path)?;
+    fs::rename(&png_tmp, &png_path)?;
+
+    println!("Saved:\n  {}\n  {}", mz_path.display(), png_path.display());
 
     Ok(())
 }
