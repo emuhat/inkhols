@@ -21,6 +21,7 @@ use skia_safe::AlphaType;
 use skia_safe::Color4f;
 use skia_safe::ColorType;
 use skia_safe::Data;
+use skia_safe::FontMgr;
 use skia_safe::Image;
 use skia_safe::ImageInfo;
 use skia_safe::Path;
@@ -28,7 +29,6 @@ use skia_safe::gradient_shader;
 use skia_safe::image::CachingHint;
 use skia_safe::{
     Canvas, Color, Font, Paint, PaintStyle, Point, RRect, Rect, Surface, TextBlob, TileMode,
-    Typeface,
 };
 use std::fs;
 use std::fs::File;
@@ -338,7 +338,7 @@ fn days_between(date: NaiveDate) -> i64 {
 
 const WEEKDAYS3: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-fn draw_colored_line(canvas: &mut Canvas, start: Point, end: Point, color: Color) {
+fn draw_colored_line(canvas: &Canvas, start: Point, end: Point, color: Color) {
     let mut paint = Paint::default();
     paint.set_color(color); // medium gray
     paint.set_anti_alias(true); // Smooth edges
@@ -347,12 +347,12 @@ fn draw_colored_line(canvas: &mut Canvas, start: Point, end: Point, color: Color
     canvas.draw_line(start, end, &paint);
 }
 
-fn draw_line(canvas: &mut Canvas, start: Point, end: Point) {
+fn draw_line(canvas: &Canvas, start: Point, end: Point) {
     draw_colored_line(canvas, start, end, Color::from_rgb(200, 200, 200))
 }
 
 #[allow(dead_code)]
-fn draw_rect_thing(canvas: &mut Canvas, x: i32, y: i32, width: i32, height: i32) {
+fn draw_rect_thing(canvas: &Canvas, x: i32, y: i32, width: i32, height: i32) {
     let margin = 0; //6;
     let mut paint = Paint::default();
     paint.set_color(Color::from_rgb(0, 128, 255));
@@ -379,7 +379,7 @@ fn line_height(font: &Font) -> f32 {
 }
 
 fn draw_text_blob_with_color(
-    canvas: &mut Canvas,
+    canvas: &Canvas,
     font: &Font,
     x: i32,
     y: i32,
@@ -406,41 +406,54 @@ fn draw_text_blob_with_color(
     }
 }
 
-fn draw_text_blob(canvas: &mut Canvas, font: &Font, x: i32, y: i32, text: &str) {
+fn draw_text_blob(canvas: &Canvas, font: &Font, x: i32, y: i32, text: &str) {
     draw_text_blob_with_color(canvas, font, x, y, text, Color::BLACK, 0.0);
 }
 
-fn load_font_from_file(path: &str, size: f32) -> Font {
-    // Load the font file into memory
+fn load_font_from_file(font_mgr: &FontMgr, path: &str, size: f32) -> Font {
+    // Read the font file into memory
     let font_bytes = fs::read(path).expect("Failed to read font file");
-    let data = Data::new_copy(&font_bytes);
 
-    // Create the typeface from the in-memory data
-    let tf = Typeface::from_data(data, 0).unwrap_or_else(|| Typeface::default());
+    // Create the typeface via the FontMgr
+    let typeface = font_mgr
+        .new_from_data(&font_bytes, 0)
+        .unwrap_or_else(|| Font::default().typeface()); // fallback to default Font's typeface
 
-    Font::new(tf, size)
+    // Create the Font
+    Font::from_typeface(&typeface, size)
 }
 
 struct FontBoss {
+    font_mgr: skia_safe::FontMgr,
     pub main_font: Font,
     pub emoji_font: Font,
 }
 
 impl FontBoss {
-    pub fn load_font(size: f32) -> Font {
-        load_font_from_file("Crimson_Pro/static/CrimsonPro-Regular.ttf", size)
+    pub fn load_font(&self, size: f32) -> Font {
+        load_font_from_file(
+            &self.font_mgr,
+            "Crimson_Pro/static/CrimsonPro-Regular.ttf",
+            size,
+        )
     }
 
-    pub fn load_bold_font(size: f32) -> Font {
-        load_font_from_file("Crimson_Pro/static/CrimsonPro-Bold.ttf", size)
+    pub fn load_bold_font(&self, size: f32) -> Font {
+        load_font_from_file(
+            &self.font_mgr,
+            "Crimson_Pro/static/CrimsonPro-Bold.ttf",
+            size,
+        )
     }
 
     pub fn new() -> Self {
-        // Try to load Roboto but fallback to default if missing.
-        let font = Self::load_font(25.0);
-        let emoji_font = load_font_from_file("NotoEmoji.ttf", 30.0);
+        let font_mgr = skia_safe::FontMgr::default();
+        let font =
+            load_font_from_file(&font_mgr, "Crimson_Pro/static/CrimsonPro-Regular.ttf", 25.0);
+        let emoji_font = load_font_from_file(&font_mgr, "NotoEmoji.ttf", 30.0);
 
         FontBoss {
+            font_mgr: font_mgr,
             main_font: font,
             emoji_font: emoji_font,
         }
@@ -450,7 +463,7 @@ impl FontBoss {
 /// ---- Layout engine: container splitting and child dispatch ----
 
 fn handle_container(
-    canvas: &mut Canvas,
+    canvas: &Canvas,
     font_boss: &FontBoss,
     container: &ContainerNode,
     split: &SplitDirection,
@@ -525,7 +538,7 @@ fn handle_container(
 
 // Draws a smooth Catmull-Rom spline through the points
 // and fills the area under it down to the baseline.
-fn fill_catmull_rom_area(canvas: &mut Canvas, points: &[Point], baseline_y: f32) {
+fn fill_catmull_rom_area(canvas: &Canvas, points: &[Point], baseline_y: f32) {
     if points.len() < 2 {
         return;
     }
@@ -593,7 +606,7 @@ fn fill_catmull_rom_area(canvas: &mut Canvas, points: &[Point], baseline_y: f32)
     canvas.draw_path(&curve_path, &paint_curve);
 }
 
-fn draw_filled_circle(canvas: &mut Canvas, center: Point, radius: f32, color: Color) {
+fn draw_filled_circle(canvas: &Canvas, center: Point, radius: f32, color: Color) {
     let mut paint = Paint::default();
     paint.set_color(color); // red color
     paint.set_anti_alias(true); // smooth edges
@@ -603,7 +616,7 @@ fn draw_filled_circle(canvas: &mut Canvas, center: Point, radius: f32, color: Co
 }
 
 fn draw_hourly(
-    canvas: &mut Canvas,
+    canvas: &Canvas,
     mini_font: &Font,
     x: i32,
     y: i32,
@@ -663,7 +676,7 @@ fn draw_hourly(
 }
 
 fn draw_box_with_gradient(
-    canvas: &mut Canvas,
+    canvas: &Canvas,
     x: i32,
     y: i32,
     width: i32,
@@ -717,7 +730,7 @@ fn draw_box_with_gradient(
     canvas.draw_rrect(rrect, &stroke_paint);
 }
 
-fn draw_temp_gradient(canvas: &mut Canvas, x: i32, y: i32, width: i32, height: i32) {
+fn draw_temp_gradient(canvas: &Canvas, x: i32, y: i32, width: i32, height: i32) {
     draw_box_with_gradient(
         canvas,
         x,
@@ -781,7 +794,7 @@ fn get_temp_range(values: &[f32]) -> (f32, f32) {
 }
 
 fn draw_weather_wrapped(
-    canvas: &mut Canvas,
+    canvas: &Canvas,
     font_boss: &FontBoss,
     x: i32,
     y: i32,
@@ -821,7 +834,7 @@ fn get_today_hi_low(weather: &WeatherResponse) -> (i32, i32) {
 }
 
 fn draw_weather(
-    canvas: &mut Canvas,
+    canvas: &Canvas,
     font_boss: &FontBoss,
     x: i32,
     y: i32,
@@ -839,9 +852,9 @@ fn draw_weather(
         None,
     );
 
-    let mini_font = FontBoss::load_font(20.0);
-    let med_font = FontBoss::load_font(35.0);
-    let mega_font = FontBoss::load_font(100.0);
+    let mini_font = font_boss.load_font(20.0);
+    let med_font = font_boss.load_font(35.0);
+    let mega_font = font_boss.load_font(100.0);
     let now_offset = 30;
 
     let cur_temp_str = format!("{}°", weather.current.temperature.round());
@@ -1227,19 +1240,18 @@ fn process_verse_token(token: &str) -> (String, bool) {
 }
 
 fn measure_and_draw(
-    canvas: &mut Canvas,
+    canvas: &Canvas,
+    font: &Font,
+    ref_font: &Font,
     x: i32,
     y: i32,
     width: i32,
     height: i32,
     tokens: &Vec<&str>,
     attr: &str,
-    fsize: f32,
     draw: bool,
     ypad: i32,
 ) -> f32 {
-    let ref_font = FontBoss::load_font(fsize * 0.8);
-    let font = FontBoss::load_font(fsize);
     let spacew = font.measure_str(" ", None).0;
     let padding = 25;
 
@@ -1312,7 +1324,7 @@ fn measure_and_draw(
     leftover
 }
 
-fn draw_verse(canvas: &mut Canvas, x: i32, y: i32, width: i32, height: i32) {
+fn draw_verse(canvas: &Canvas, font_boss: &FontBoss, x: i32, y: i32, width: i32, height: i32) {
     let now = Local::now();
     let date_str = now.format("%B %d %Y %p").to_string();
     // let date_str = now.format("%H:%M:%s").to_string();
@@ -1330,14 +1342,15 @@ fn draw_verse(canvas: &mut Canvas, x: i32, y: i32, width: i32, height: i32) {
     match get_verse_by_seed(db_path, hash64).unwrap() {
         Some((reference, text)) => {
             println!("{} → {}", reference, text);
-            really_draw_verse(canvas, x, y, width, height, &reference, &text);
+            really_draw_verse(canvas, font_boss, x, y, width, height, &reference, &text);
         }
         None => println!("No verses found in DB."),
     };
 }
 
 fn really_draw_verse(
-    canvas: &mut Canvas,
+    canvas: &Canvas,
+    font_boss: &FontBoss,
     x: i32,
     y: i32,
     width: i32,
@@ -1362,15 +1375,19 @@ fn really_draw_verse(
     for i in (10..=50).rev() {
         let fsize = i as f32 * 0.5;
 
+        let ref_font = font_boss.load_font(fsize * 0.8);
+        let font = font_boss.load_font(fsize);
+
         let yleftover = measure_and_draw(
             canvas,
+            &font,
+            &ref_font,
             x + margin,
             y + margin,
             width,
             height,
             &tokens,
             &attr,
-            fsize,
             false,
             0,
         );
@@ -1384,13 +1401,14 @@ fn really_draw_verse(
             let ypad = (yleftover * 0.5).round();
             let _ = measure_and_draw(
                 canvas,
+                &font,
+                &ref_font,
                 x + margin,
                 y + margin,
                 width,
                 height,
                 &tokens,
                 &attr,
-                fsize,
                 true,
                 ypad as i32,
             );
@@ -1439,17 +1457,10 @@ fn today_multiplier(cleaning: &[DailyScore]) -> Option<i32> {
         .map(|d| d.multiplier)
 }
 
-fn draw_people(
-    canvas: &mut Canvas,
-    font_boss: &FontBoss,
-    x: i32,
-    y: i32,
-    width: i32,
-    data: &AllData,
-) {
-    let mini_bold_font = FontBoss::load_bold_font(20.0);
-    let mini_font = FontBoss::load_font(20.0);
-    let bold_font = FontBoss::load_bold_font(25.0);
+fn draw_people(canvas: &Canvas, font_boss: &FontBoss, x: i32, y: i32, width: i32, data: &AllData) {
+    let mini_bold_font = font_boss.load_bold_font(20.0);
+    let mini_font = font_boss.load_font(20.0);
+    let bold_font = font_boss.load_bold_font(25.0);
 
     let cleaning = &data.cleaning;
     let balances = &data.balances;
@@ -1512,7 +1523,7 @@ fn draw_people(
             Color::BLACK,
         );
 
-        let big_bold_font = FontBoss::load_bold_font(35.0);
+        let big_bold_font = font_boss.load_bold_font(35.0);
         draw_text_blob_with_color(
             canvas,
             &big_bold_font,
@@ -1559,7 +1570,7 @@ fn draw_people(
             chrono::Weekday::Sun => "Su",
         };
 
-        let mut opt_mult: Option<i32> = if day.multiplier > 1 {
+        let opt_mult: Option<i32> = if day.multiplier > 1 {
             Some(day.multiplier)
         } else {
             None
@@ -1605,8 +1616,6 @@ fn draw_people(
     let mut i = 0;
     for person in ordered_names {
         let scores = scores_by_person.get(&person.person_id);
-        let bal = balance_by_id.get(&person.person_id);
-
         let name = name_by_id.get(&person.person_id).unwrap_or(&"Unknown");
         let bal = balance_by_id.get(&person.person_id);
         let yoff = y + i as i32 * 60 + 60;
@@ -1673,7 +1682,7 @@ fn draw_people(
 }
 
 fn maybe_draw_people(
-    canvas: &mut Canvas,
+    canvas: &Canvas,
     font_boss: &FontBoss,
     x: i32,
     y: i32,
@@ -1696,9 +1705,9 @@ fn maybe_draw_people(
     }
 }
 
-fn draw_date(canvas: &mut Canvas, _font_boss: &FontBoss, x: i32, y: i32, width: i32, _height: i32) {
-    let font = FontBoss::load_font(35.0);
-    let bold_font = FontBoss::load_bold_font(35.0);
+fn draw_date(canvas: &Canvas, font_boss: &FontBoss, x: i32, y: i32, width: i32, _height: i32) {
+    let font = font_boss.load_font(35.0);
+    let bold_font = font_boss.load_bold_font(35.0);
 
     // Get the current local datetime
     let now = Local::now();
@@ -1747,7 +1756,7 @@ fn draw_date(canvas: &mut Canvas, _font_boss: &FontBoss, x: i32, y: i32, width: 
 }
 
 fn handle_child(
-    canvas: &mut Canvas,
+    canvas: &Canvas,
     font_boss: &FontBoss,
     node: &LayoutNode,
     x: i32,
@@ -1860,7 +1869,7 @@ fn handle_child(
             // draw_text_blob(canvas, &font_boss.main_font, x, y, "Battery");
         }
         LayoutNode::Verse(_) => {
-            draw_verse(canvas, x, y, width, height);
+            draw_verse(canvas, font_boss, x, y, width, height);
         }
     }
 }
