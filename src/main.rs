@@ -564,10 +564,9 @@ fn fill_catmull_rom_area(canvas: &mut Canvas, points: &[Point], baseline_y: f32)
     canvas.draw_path(&curve_path, &paint_curve);
 }
 
-#[allow(dead_code)]
-fn draw_filled_circle(canvas: &mut Canvas, center: Point, radius: f32) {
+fn draw_filled_circle(canvas: &mut Canvas, center: Point, radius: f32, color: Color) {
     let mut paint = Paint::default();
-    paint.set_color(Color::from_rgb(200, 50, 50)); // red color
+    paint.set_color(color); // red color
     paint.set_anti_alias(true); // smooth edges
     paint.set_style(PaintStyle::Fill); // fill, not stroke
 
@@ -1223,27 +1222,6 @@ fn measure_and_draw(
     let target_width = (width - padding * 3) as f32;
     let target_height = (height - padding * 3) as f32;
 
-    if false && draw {
-        draw_filled_circle(
-            canvas,
-            Point::new((x + padding) as f32, (y + padding) as f32),
-            3.0,
-        );
-        draw_filled_circle(
-            canvas,
-            Point::new((x + padding) as f32 + target_width, (y + padding) as f32),
-            3.0,
-        );
-        draw_filled_circle(
-            canvas,
-            Point::new(
-                (x + padding) as f32 + target_width,
-                (y + padding) as f32 + target_height,
-            ),
-            3.0,
-        );
-    }
-
     for token in tokens {
         let (val, is_number) = process_verse_token(token);
         let token = &val;
@@ -1416,24 +1394,94 @@ fn draw_people(
     width: i32,
     data: &AllData,
 ) {
+    let mini_bold_font = FontBoss::load_bold_font(20.0);
     let mini_font = FontBoss::load_font(20.0);
-    for j in 0..5 {
+    let bold_font = FontBoss::load_bold_font(25.0);
+
+    if !false {
+        draw_filled_circle(
+            canvas,
+            Point::new((x + 21) as f32, (y + 8) as f32),
+            20.0,
+            Color::BLACK,
+        );
+
+        let big_bold_font = FontBoss::load_bold_font(35.0);
         draw_text_blob_with_color(
             canvas,
-            &mini_font,
-            x + width - 205 + 19 + j as i32 * 40,
-            y + 10,
-            WEEKDAYS2[j],
-            Color::from_rgb(128, 128, 128),
+            &big_bold_font,
+            x + 21,
+            y + 18,
+            "3",
+            Color::WHITE,
             0.5,
         );
     }
 
+    else {
+        draw_text_blob_with_color(
+            canvas,
+            &bold_font,
+            x,
+            y + 15,
+            "Allowances",
+            Color::BLACK,
+            0.0,
+        );
+    }
+
+    let any_mults = false;
+    for j in 0..5 {
+        let mut opt_mult: Option<i32> = None; //if j == 2 { Some(2) } else { None }; //Some(2);
+
+        draw_text_blob_with_color(
+            canvas,
+            &mini_font,
+            x + width - 205 + 19 + j as i32 * 40,
+            y + 18 - if any_mults {0} else {6},
+            WEEKDAYS2[j],
+            Color::from_rgb(128, 128, 128),
+            0.5,
+        );
+
+        if let Some(mult) = opt_mult {
+            draw_filled_circle(
+                canvas,
+                Point::new(
+                    (x + width - 205 + 19 + j as i32 * 40) as f32,
+                    (y - 9) as f32,
+                ),
+                10.0,
+                Color::BLACK,
+            );
+
+            draw_text_blob_with_color(
+                canvas,
+                &mini_bold_font,
+                x + width - 205 + 19 + j as i32 * 40,
+                y - 4,
+                &mult.to_string(),
+                Color::WHITE,
+                0.5,
+            );
+        }
+    }
+
     for i in 0..data.people.len() {
-        let yoff = y + i as i32 * 50 + 50;
+        let yoff = y + i as i32 * 60 + 60;
         let person = &data.people[i];
 
         draw_text_blob(canvas, &font_boss.main_font, x, yoff, &person.name);
+
+        draw_text_blob_with_color(
+            canvas,
+            &mini_font,
+            x + width - 240,
+            yoff + 25,
+            "Sunday:   +$2.05  −$1.42",
+            Color::BLACK,
+            1.0,
+        );
 
         for j in 0..person.cleaning.len() {
             draw_text_blob(
@@ -1692,32 +1740,27 @@ pub fn read_envelope<T: DeserializeOwned>(path: &str) -> io::Result<(T, f64)> {
 fn dither_and_pack_3bpp(image_data: &[u8], width: usize, height: usize) -> Vec<u8> {
     // Step 1: Dither to 8 levels (0-7) using Floyd-Steinberg
     let dithered = floyd_steinberg_to_levels(image_data, width, height, 8);
-    
+
     // Step 2: Pack to 3bpp format
     pack_3bpp_high_first(&dithered, width, height)
 }
 
-fn floyd_steinberg_to_levels(
-    gray: &[u8],
-    width: usize,
-    height: usize,
-    levels: usize,
-) -> Vec<u8> {
+fn floyd_steinberg_to_levels(gray: &[u8], width: usize, height: usize, levels: usize) -> Vec<u8> {
     assert!(levels >= 2, "levels must be >= 2");
-    
+
     let mut work = vec![0.0f32; gray.len()];
     for (i, &val) in gray.iter().enumerate() {
         work[i] = val as f32;
     }
-    
+
     let mut out = vec![0u8; gray.len()];
     let step = 255.0 / (levels - 1) as f32;
-    
+
     // Floyd-Steinberg kernel: right, bottom-left, bottom, bottom-right
     // with weights 7/16, 3/16, 5/16, 1/16
     let kernel = [(1, 0, 7), (-1, 1, 3), (0, 1, 5), (1, 1, 1)];
     let norm = 16.0;
-    
+
     for y in 0..height {
         // Serpentine scan (zigzag left-right)
         let (x_start, x_end, x_step) = if y % 2 == 1 {
@@ -1725,41 +1768,37 @@ fn floyd_steinberg_to_levels(
         } else {
             (0, width, 1isize)
         };
-        
+
         let mut x = x_start;
         while x != x_end {
             let i = y * width + x;
             let val = work[i];
-            
+
             // Quantize to nearest level
             let k = (val / step).round() as i32;
             let k = k.clamp(0, (levels - 1) as i32) as u8;
             out[i] = k;
-            
+
             // Calculate quantization error
             let qv = k as f32 * step;
             let err = val - qv;
-            
+
             // Diffuse error to neighbors
             for &(dx, dy, w) in &kernel {
                 let dx_adj = if y % 2 == 1 { -dx } else { dx };
                 let nx = x as isize + dx_adj;
                 let ny = y as isize + dy;
-                
+
                 if nx >= 0 && nx < width as isize && ny >= 0 && ny < height as isize {
                     let j = (ny as usize) * width + (nx as usize);
                     work[j] = (work[j] + (err * w as f32) / norm).clamp(0.0, 255.0);
                 }
             }
-            
-            x = if x_step < 0 {
-                x.wrapping_sub(1)
-            } else {
-                x + 1
-            };
+
+            x = if x_step < 0 { x.wrapping_sub(1) } else { x + 1 };
         }
     }
-    
+
     out
 }
 
@@ -1767,17 +1806,17 @@ fn pack_3bpp_high_first(idx: &[u8], width: usize, height: usize) -> Vec<u8> {
     let bytes_per_row = (width + 1) / 2;
     let mut out = vec![0u8; bytes_per_row * height];
     let mut oi = 0;
-    
+
     for y in 0..height {
         let mut nibs = 0;
         let mut byte = 0u8;
-        
+
         for x in 0..width {
             let v3 = idx[y * width + x] & 0x07;
             let nibble = (v3 << 1) & 0x0F;
             byte = (byte << 4) | nibble;
             nibs += 1;
-            
+
             if nibs == 2 {
                 out[oi] = byte;
                 oi += 1;
@@ -1785,56 +1824,14 @@ fn pack_3bpp_high_first(idx: &[u8], width: usize, height: usize) -> Vec<u8> {
                 byte = 0;
             }
         }
-        
+
         if nibs == 1 {
             out[oi] = byte << 4;
             oi += 1;
         }
     }
-    
-    out
-}
 
-fn write_c_header(
-    packed_data: &[u8],
-    width: usize,
-    height: usize,
-    array_name: &str,
-    filename: &str,
-) -> std::io::Result<()> {
-    let mut file = BufWriter::new(File::create(filename)?);
-    
-    // Write header comment
-    writeln!(file, "// 3-bit grayscale image (2 pixels per byte)")?;
-    writeln!(file, "// size: {}x{}px, total bytes: {}", width, height, packed_data.len())?;
-    writeln!(file)?;
-    
-    // Write array declaration
-    writeln!(file, "const uint8_t {}[] PROGMEM = {{", array_name)?;
-    
-    // Write data in rows of 16 bytes
-    for (i, chunk) in packed_data.chunks(16).enumerate() {
-        write!(file, "  ")?;
-        
-        for (j, &byte) in chunk.iter().enumerate() {
-            write!(file, "0x{:02X}", byte)?;
-            
-            // Add comma if not the last byte overall
-            if i * 16 + j < packed_data.len() - 1 {
-                write!(file, ", ")?;
-            }
-        }
-        
-        writeln!(file)?;
-    }
-    
-    writeln!(file, "}};")?;
-    
-    // Write width and height constants
-    writeln!(file, "const uint16_t {}_w = {};", array_name, width)?;
-    writeln!(file, "const uint16_t {}_h = {};", array_name, height)?;
-    
-    Ok(())
+    out
 }
 
 fn apply_gamma(gray: &[u8], gamma: f32) -> Vec<u8> {
@@ -1939,16 +1936,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("Failed to read pixels".into());
     }
 
-    let darkened = apply_gamma(&red_channel, 1.5);  // Try 1.3 to 1.8
+    let darkened = apply_gamma(&red_channel, 1.6); // Try 1.3 to 1.8
 
     let packed = dither_and_pack_3bpp(&darkened, width, height);
 
     // Verify size
     println!("Packed size: {} bytes (expected 495000)", packed.len());
     assert_eq!(packed.len(), 495_000, "Size mismatch!");
-    
-    // Write to file
-    write_c_header(&packed, width, height, "output", "image.h")?;
 
     let compressed = compress_to_vec(&packed, 8);
     let mut file = File::create("image.mz")?;
