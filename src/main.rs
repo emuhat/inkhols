@@ -45,6 +45,20 @@ use std::path::Path as FsPath;
 /// ---- Data model (from JSON) ----
 
 #[derive(Debug, Deserialize)]
+struct PersonName {
+    person_id: u32,
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PersonBalance {
+    person_id: u32,
+    balance: i64,
+    up: i64,
+    down: i64,
+}
+
+#[derive(Debug, Deserialize)]
 struct Entry {
     person_id: u32,
     score: String,
@@ -1239,6 +1253,7 @@ fn measure_and_draw(
 
         let use_font = if is_number { &ref_font } else { &font };
         let push_up = if is_number { lh * 0.25 } else { 0.0 } as i32;
+        let color = if is_number { Color::from_rgb(100, 100, 100) } else { Color::BLACK };
 
         let ww = use_font.measure_str(token, None).0;
         // println!("{} - {}", token, ww);
@@ -1249,12 +1264,14 @@ fn measure_and_draw(
         }
 
         if draw {
-            draw_text_blob(
+            draw_text_blob_with_color(
                 canvas,
                 &use_font,
                 xp as i32 + x + padding,
                 yp as i32 + y + padding + ypad - push_up,
                 token,
+                color,
+                0.0
             );
         }
 
@@ -1328,8 +1345,8 @@ fn really_draw_verse(
         y + margin,
         width - margin,
         height - margin * 2,
-        Color::from_rgb(220, 220, 220),
-        Color::from_rgb(240, 240, 240),
+        Color::from_rgb(230, 230, 230),
+        Color::from_rgb(255, 255, 255),
     );
 
     let tokens: Vec<&str> = verse.split_whitespace().collect();
@@ -1409,6 +1426,7 @@ fn draw_people(
     let mini_font = FontBoss::load_font(20.0);
     let bold_font = FontBoss::load_bold_font(25.0);
 
+    // header -- allowances or today's lucky multiplier
     if !false {
         draw_filled_circle(
             canvas,
@@ -1441,6 +1459,7 @@ fn draw_people(
         );
     }
 
+    // weekyday headers
     let any_mults = false;
     for j in 0..5 {
         let mut opt_mult: Option<i32> = None; //if j == 2 { Some(2) } else { None }; //Some(2);
@@ -1451,7 +1470,7 @@ fn draw_people(
             x + width - 205 + 19 + j as i32 * 40,
             y + 18 - if any_mults {0} else {6},
             WEEKDAYS2[j],
-            Color::from_rgb(128, 128, 128),
+            Color::BLACK,
             0.5,
         );
 
@@ -1478,6 +1497,7 @@ fn draw_people(
         }
     }
 
+    // people data
     for i in 0..data.people.len() {
         let yoff = y + i as i32 * 60 + 60;
         let person = &data.people[i];
@@ -1499,7 +1519,7 @@ fn draw_people(
                 canvas,
                 &font_boss.emoji_font,
                 x + width - 205 + j as i32 * 40,
-                yoff,
+                yoff + 10,
                 &person.cleaning[j],
             );
         }
@@ -1864,14 +1884,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (people, people_age_hours) = read_envelope::<Vec<Person>>("people.json")?;
     println!("People data is {:.1} hours old", weather_age_hours);
 
-
     let (cleaning, _) = read_envelope::<Vec<DailyScore>>("cleaning.json")?;
     // println!("People data is {:.1} hours old", weather_age_hours);
-
-
-
-    // Parse JSON string into Vec<DailyScore>
-    // let daily_scores: Vec<DailyScore> = serde_json::from_str(data)?;
 
     // Print to verify
     for daily in cleaning {
@@ -1881,6 +1895,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  Person {}: {}", entry.person_id, entry.score);
         }
     }
+
+
+    let (allowance, _) = read_envelope::<Vec<PersonBalance>>("allowance.json")?;
+
+    for b in allowance {
+        println!(
+            "Person {}: balance={}, up={}, down={}",
+            b.person_id, b.balance, b.up, b.down
+        );
+    }
+
+
+    let (names, _) = read_envelope::<Vec<PersonName>>("names.json")?;
+    
+    for p in names {
+        println!("Person {} is {}", p.person_id, p.name);
+    }
+
+
 
 
     let data = fs::read_to_string("dates.json")?;
