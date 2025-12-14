@@ -446,6 +446,10 @@ struct FontBoss {
 }
 
 impl FontBoss {
+    pub fn load_roboto_extra_bold_font(&self, size: f32) -> Font {
+        load_font_from_file(&self.font_mgr, "Roboto/Roboto-ExtraBold.ttf", size)
+    }
+
     pub fn load_font(&self, size: f32) -> Font {
         load_font_from_file(
             &self.font_mgr,
@@ -1476,6 +1480,7 @@ fn today_multiplier(cleaning: &[DailyScore]) -> Option<i32> {
 fn draw_people(canvas: &Canvas, font_boss: &FontBoss, x: i32, y: i32, width: i32, data: &AllData) {
     let mini_bold_font = font_boss.load_bold_font(20.0);
     let mini_font = font_boss.load_font(20.0);
+    let mini_rb_font = font_boss.load_roboto_extra_bold_font(20.0);
     let bold_font = font_boss.load_bold_font(25.0);
 
     let cleaning = &data.cleaning;
@@ -1535,20 +1540,22 @@ fn draw_people(canvas: &Canvas, font_boss: &FontBoss, x: i32, y: i32, width: i32
         draw_filled_circle(
             canvas,
             Point::new((x + 21) as f32, (y + 8) as f32),
-            20.0,
+            23.0,
             Color::BLACK,
         );
 
-        let big_bold_font = font_boss.load_bold_font(35.0);
+        let big_bold_font = font_boss.load_roboto_extra_bold_font(35.0);
         draw_text_blob_with_color(
             canvas,
             &big_bold_font,
             x + 21,
-            y + 18,
+            y + 20,
             &mult.to_string(),
             Color::WHITE,
             0.5,
         );
+
+        draw_text_blob(canvas, &font_boss.emoji_font, x + 51, y + 18, "🎉");
     } else {
         draw_text_blob_with_color(
             canvas,
@@ -1609,15 +1616,15 @@ fn draw_people(canvas: &Canvas, font_boss: &FontBoss, x: i32, y: i32, width: i32
                     (x + width - 205 + 19 + j as i32 * 40) as f32,
                     (y - 9) as f32,
                 ),
-                10.0,
+                11.0,
                 Color::BLACK,
             );
 
             draw_text_blob_with_color(
                 canvas,
-                &mini_bold_font,
+                &mini_rb_font,
                 x + width - 205 + 19 + j as i32 * 40,
-                y - 4,
+                y - 2,
                 &mult.to_string(),
                 Color::WHITE,
                 0.5,
