@@ -58,6 +58,19 @@ struct Args {
 
 /// ---- Data model (from JSON) ----
 
+#[derive(Debug, Deserialize)]
+struct UpcomingPayout {
+    date: String, // could use NaiveDate if you want automatic date parsing
+    payout_cents: f64,
+    person_id: i64,
+}
+
+#[derive(Debug)]
+struct PayoutSum {
+    positive: f64,
+    negative: f64,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 struct PersonName {
     person_id: u32,
@@ -67,9 +80,7 @@ struct PersonName {
 #[derive(Debug, Deserialize)]
 struct PersonBalance {
     person_id: u32,
-    balance: i64,
-    up: i64,
-    down: i64,
+    balance_cents: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -168,11 +179,14 @@ pub struct AllData {
     cleaning: Vec<DailyScore>,
     cleaning_age_hours: f64,
 
+    names: Vec<PersonName>,
+    names_age_hours: f64,
+
     balances: Vec<PersonBalance>,
     balances_age_hours: f64,
 
-    names: Vec<PersonName>,
-    names_age_hours: f64,
+    upcoming_payouts: Vec<UpcomingPayout>,
+    upcoming_payouts_age_hours: f64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1478,13 +1492,13 @@ fn today_multiplier(cleaning: &[DailyScore]) -> Option<i32> {
 }
 
 fn draw_people(canvas: &Canvas, font_boss: &FontBoss, x: i32, y: i32, width: i32, data: &AllData) {
-    let mini_bold_font = font_boss.load_bold_font(20.0);
     let mini_font = font_boss.load_font(20.0);
     let mini_rb_font = font_boss.load_roboto_extra_bold_font(20.0);
     let bold_font = font_boss.load_bold_font(25.0);
 
     let cleaning = &data.cleaning;
     let balances = &data.balances;
+    let upcoming_payouts = &data.upcoming_payouts;
     let names = &data.names;
 
     ///////////////////////////////////////////////////////////////////////
@@ -1493,6 +1507,21 @@ fn draw_people(canvas: &Canvas, font_boss: &FontBoss, x: i32, y: i32, width: i32
     // ---- Build lookup tables ----
     let balance_by_id: HashMap<u32, &PersonBalance> =
         balances.iter().map(|b| (b.person_id, b)).collect();
+
+    let mut sums: HashMap<i64, PayoutSum> = HashMap::new();
+
+    for payout in upcoming_payouts {
+        let entry = sums.entry(payout.person_id).or_insert(PayoutSum {
+            positive: 0.0,
+            negative: 0.0,
+        });
+
+        if payout.payout_cents >= 0.0 {
+            entry.positive += payout.payout_cents;
+        } else {
+            entry.negative += payout.payout_cents;
+        }
+    }
 
     let name_by_id: HashMap<u32, &str> = names
         .iter()
@@ -1641,10 +1670,12 @@ fn draw_people(canvas: &Canvas, font_boss: &FontBoss, x: i32, y: i32, width: i32
         let scores = scores_by_person.get(&person.person_id);
         let name = name_by_id.get(&person.person_id).unwrap_or(&"Unknown");
         let bal = balance_by_id.get(&person.person_id);
+        let upcoming = sums.get(&(person.person_id as i64));
+
         let yoff = y + i as i32 * 60 + 60;
 
         if let Some(b) = bal {
-            print!("{} -- {}, +{}, {}   ", name, b.balance, b.up, b.down);
+            print!("{} -- {}, +{}, {}   ", name, b.balance_cents, 444, 444);
         } else {
             print!("{} -- (no balance)   ", name);
         }
@@ -1659,28 +1690,36 @@ fn draw_people(canvas: &Canvas, font_boss: &FontBoss, x: i32, y: i32, width: i32
                 &font_boss.main_font,
                 x + width - 240,
                 yoff,
-                &format_cents_commas(b.balance),
+                &format_cents_commas(b.balance_cents),
                 Color::BLACK,
                 1.0,
             );
 
             // weekly up/down
+            if let Some(up) = upcoming {
+                let downcents = (up.negative).round() as i64;
+                let upcents = (up.positive).round() as i64;
 
-            let down_balance = if b.down < 0 {
-                format!("  {}", &format_cents_commas(b.down))
-            } else {
-                "".to_string()
-            };
+                let down_balance = if downcents < 0 {
+                    format!("  {}", &format_cents_commas(downcents))
+                } else {
+                    "".to_string()
+                };
 
-            draw_text_blob_with_color(
-                canvas,
-                &mini_font,
-                x + width - 240,
-                yoff + 25,
-                &format!("Week:   +{}{}", &format_cents_commas(b.up), &down_balance),
-                Color::BLACK,
-                1.0,
-            );
+                draw_text_blob_with_color(
+                    canvas,
+                    &mini_font,
+                    x + width - 240,
+                    yoff + 25,
+                    &format!(
+                        "Week:   +{}{}",
+                        &format_cents_commas(upcents),
+                        &down_balance
+                    ),
+                    Color::BLACK,
+                    1.0,
+                );
+            }
         }
 
         // cleaning emojis
@@ -2041,10 +2080,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     let cleaning_path = absolute_path_string(args.data_dir.join("cleaning.json"))?;
-    let allowance_path = absolute_path_string(args.data_dir.join("allowance.json"))?;
+    let balances_path = absolute_path_string(args.data_dir.join("balances.json"))?;
     let names_path = absolute_path_string(args.data_dir.join("names.json"))?;
     let weather_path = absolute_path_string(args.data_dir.join("weather.json"))?;
     let dates_path = absolute_path_string(args.data_dir.join("dates.json"))?;
+    let upcoming_payouts_path = absolute_path_string(args.data_dir.join("upcoming_payouts.json"))?;
 
     let (weather, weather_age_hours) = read_envelope::<WeatherResponse>(&weather_path)?;
     println!("Weather data is {:.1} hours old", weather_age_hours);
@@ -2052,11 +2092,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (cleaning, cleaning_age_hours) = read_envelope::<Vec<DailyScore>>(&cleaning_path)?;
     println!("People data is {:.1} hours old", cleaning_age_hours);
 
-    let (balances, balances_age_hours) = read_envelope::<Vec<PersonBalance>>(&allowance_path)?;
+    let (balances, balances_age_hours) = read_envelope::<Vec<PersonBalance>>(&balances_path)?;
     println!("Balances data is {:.1} hours old", balances_age_hours);
 
     let (names, names_age_hours) = read_envelope::<Vec<PersonName>>(&names_path)?;
     println!("Names data is {:.1} hours old", names_age_hours);
+
+    let (upcoming_payouts, upcoming_payouts_age_hours) =
+        read_envelope::<Vec<UpcomingPayout>>(&upcoming_payouts_path)?;
+    println!(
+        "Upcoming_payouts data is {:.1} hours old",
+        upcoming_payouts_age_hours
+    );
 
     let data = fs::read_to_string(&dates_path)?;
     let significant_dates: Vec<SignificantDate> = serde_json::from_str(&data)?;
@@ -2071,10 +2118,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         significant_dates: significant_dates,
         cleaning: cleaning,
         cleaning_age_hours: cleaning_age_hours,
-        balances: balances,
-        balances_age_hours: balances_age_hours,
         names: names,
         names_age_hours: names_age_hours,
+        balances: balances,
+        balances_age_hours: balances_age_hours,
+        upcoming_payouts: upcoming_payouts,
+        upcoming_payouts_age_hours: upcoming_payouts_age_hours,
     };
 
     // println!("{:#?}", weather.current.temperature);
