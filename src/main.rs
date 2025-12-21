@@ -771,7 +771,7 @@ fn draw_temp_gradient(canvas: &Canvas, x: i32, y: i32, width: i32, height: i32) 
         y,
         width,
         height,
-        Color::from_rgb(140, 140, 140),
+        Color::from_rgb(180, 180, 180),
         Color::from_rgb(240, 240, 240),
     );
 }
@@ -1562,6 +1562,8 @@ fn draw_people(canvas: &Canvas, font_boss: &FontBoss, x: i32, y: i32, width: i32
     ///////////////////////////////////////////////////////////////////////
     ///////////////////////////////////////////////////////////////////////
 
+    let mut xdraw = x + 22;
+
     // See if we have a lucky multiplier today
     if let Some(mult) = today_multiplier(&cleaning)
         && mult > 1
@@ -1584,16 +1586,40 @@ fn draw_people(canvas: &Canvas, font_boss: &FontBoss, x: i32, y: i32, width: i32
             0.5,
         );
 
-        draw_text_blob(canvas, &font_boss.emoji_font, x + 51, y + 18, "🎉");
-    } else {
+        xdraw += 55;
+    }
+
+    // If *anybody* got an X or a ? we put up the death circle
+    let yesterday = chrono::Local::now().date_naive() - chrono::Duration::days(1);
+    let yesterday_str = yesterday.format("%Y-%m-%d").to_string();
+
+    let forgot_to_clean_yesterday = cleaning
+        .iter()
+        .find(|day| day.date == yesterday_str)
+        .map(|day| {
+            day.entries
+                .iter()
+                .any(|entry| entry.score == "❌" || entry.score == "❓")
+        })
+        .unwrap_or(false);
+
+    // ...and here it is
+    if forgot_to_clean_yesterday {
+        draw_filled_circle(
+            canvas,
+            Point::new((xdraw) as f32, (y + 8) as f32),
+            23.0,
+            Color::BLACK,
+        );
+
         draw_text_blob_with_color(
             canvas,
-            &bold_font,
-            x,
-            y + 15,
-            "Allowances",
-            Color::BLACK,
-            0.0,
+            &font_boss.emoji_font,
+            xdraw,
+            y + 18,
+            "💀",
+            Color::WHITE,
+            0.5,
         );
     }
 
@@ -1711,11 +1737,7 @@ fn draw_people(canvas: &Canvas, font_boss: &FontBoss, x: i32, y: i32, width: i32
                     &mini_font,
                     x + width - 240,
                     yoff + 25,
-                    &format!(
-                        "Week:   +{}{}",
-                        &format_cents_commas(upcents),
-                        &down_balance
-                    ),
+                    &format!("+{}{}", &format_cents_commas(upcents), &down_balance),
                     Color::BLACK,
                     1.0,
                 );
@@ -1724,16 +1746,26 @@ fn draw_people(canvas: &Canvas, font_boss: &FontBoss, x: i32, y: i32, width: i32
 
         // cleaning emojis
         if let Some(scores) = scores {
+            let today = chrono::Local::now().date_naive();
+
             for k in 0..num_dates.min(num_dates) {
                 let s = &scores[k];
-                print!("{} ", s);
 
+                // Replace ❓ with ❌ for past dates
+                let display_score = if *s == "❓" {
+                    let date = today - chrono::Duration::days((num_dates - 1 - k) as i64);
+                    if date < today { "❌" } else { s }
+                } else {
+                    s
+                };
+
+                print!("{} ", display_score);
                 draw_text_blob(
                     canvas,
                     &font_boss.emoji_font,
                     x + width - 205 + k as i32 * 40,
                     yoff + 10,
-                    &s,
+                    display_score,
                 );
             }
         }
