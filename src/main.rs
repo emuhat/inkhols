@@ -472,6 +472,14 @@ impl FontBoss {
         )
     }
 
+    pub fn load_italic_font(&self, size: f32) -> Font {
+        load_font_from_file(
+            &self.font_mgr,
+            "Crimson_Pro/static/CrimsonPro-Italic.ttf",
+            size,
+        )
+    }
+
     pub fn load_bold_font(&self, size: f32) -> Font {
         load_font_from_file(
             &self.font_mgr,
@@ -1959,13 +1967,26 @@ fn handle_child(
             }
         }
         LayoutNode::Battery(_) => {
-            // draw_rect_thing(canvas, x, y, width, height);
-            // draw_text_blob(canvas, &font_boss.main_font, x, y, "Battery");
+            let mini_font = font_boss.load_italic_font(20.0);
+            draw_text_blob_with_color(
+                canvas,
+                &mini_font,
+                x - 5,
+                y,
+                &last_updated_string(),
+                Color::from_rgb(128, 128, 128),
+                0.0,
+            );
         }
         LayoutNode::Verse(_) => {
             draw_verse(canvas, font_boss, x, y, width, height);
         }
     }
+}
+
+fn last_updated_string() -> String {
+    let now = Local::now();
+    now.format("Updated %a %b %-d, %-I:%M %p").to_string()
 }
 
 /// Read the inner payload of an envelope file and return (payload, hours_old)

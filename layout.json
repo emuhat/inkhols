@@ -33,7 +33,7 @@
                     "size": "1u"
                 },
                 { "type": "todo", "size": "150px" },
-                { "type": "battery", "size": "50px" }
+                { "type": "battery", "size": "12px" }
             ]
         }
     ]
