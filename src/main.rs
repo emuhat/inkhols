@@ -1934,36 +1934,39 @@ fn handle_child(
         LayoutNode::Countdown(_) => {
             let sig_dates = &data.significant_dates;
 
+            let mut yoff = y + 20;
             for i in 0..sig_dates.len() {
-                let yoff = y + i as i32 * 45 + 20;
-
                 let target = NaiveDate::parse_from_str(&sig_dates[i].date, "%Y-%m-%d").unwrap();
                 let diff = days_between(target);
 
-                // draw_rect_thing(canvas, x, y, width, height);
-                draw_text_blob(
-                    canvas,
-                    &font_boss.emoji_font,
-                    x,
-                    yoff - 2,
-                    &sig_dates[i].emoji,
-                );
-                draw_text_blob(
-                    canvas,
-                    &font_boss.main_font,
-                    x + 45,
-                    yoff,
-                    &sig_dates[i].name,
-                );
-                draw_text_blob_with_color(
-                    canvas,
-                    &font_boss.main_font,
-                    x + width - 25,
-                    yoff,
-                    &format!("{}", diff),
-                    Color::BLACK,
-                    1.0,
-                );
+                if diff >= 0 {
+                    // draw_rect_thing(canvas, x, y, width, height);
+                    draw_text_blob(
+                        canvas,
+                        &font_boss.emoji_font,
+                        x,
+                        yoff - 2,
+                        &sig_dates[i].emoji,
+                    );
+                    draw_text_blob(
+                        canvas,
+                        &font_boss.main_font,
+                        x + 45,
+                        yoff,
+                        &sig_dates[i].name,
+                    );
+                    draw_text_blob_with_color(
+                        canvas,
+                        &font_boss.main_font,
+                        x + width - 25,
+                        yoff,
+                        &format!("{}", diff),
+                        Color::BLACK,
+                        1.0,
+                    );
+
+                    yoff += 45;
+                }
             }
         }
         LayoutNode::Battery(_) => {
